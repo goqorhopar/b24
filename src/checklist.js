@@ -1,0 +1,45 @@
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import logger from "./logger.js";
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+export async function analyzeTranscript(transcript) {
+  const prompt = `
+Ты - эксперт по продажам и переговорам. Анализируешь транскрипции встреч и 
+выдаешь структурированные саммари.
+
+ЗАДАЧА:
+Проанализировать транскрипт и выдать отчет по 12 пунктам:
+
+1. АНАЛИЗ ТЕКУЩЕГО БИЗНЕСА КЛИЕНТА
+2. ВЫЯВЛЕНИЕ БОЛЕЙ И ПОТРЕБНОСТЕЙ
+3. ВОЗРАЖЕНИЯ ПО ЛИДОГЕНЕРАЦИИ
+4. РЕАКЦИЯ НА МОДЕЛЬ ГЕНЕРАЦИИ ЦЕЛЕВЫХ КЛИЕНТОВ
+5. ОСОБЫЙ ИНТЕРЕС К СЕРВИСУ
+6. НАЙДЕННЫЕ ВОЗМОЖНОСТИ
+7. ОШИБКИ МЕНЕДЖЕРА
+8. ПУТЬ К ЗАКРЫТИЮ
+9. ТОН БЕСЕДЫ
+10. КОНТРОЛЬ ДИАЛОГА
+11. РЕКОМЕНДАЦИИ
+12. КАТЕГОРИЯ КЛИЕНТА
+
+ТРАНСКРИПТ:
+${transcript}
+
+ФОРМАТ ВЫВОДА:
+Структурированный отчет по каждому пункту с конкретными примерами из транскрипта.
+Без воды, только факты и рекомендации.
+`;
+
+  try {
+    const result = await model.generateContent(prompt);
+    const text = result.response.text();
+    logger.info("✅ Отчет получен от Gemini");
+    return text;
+  } catch (err) {
+    logger.error(`Ошибка при анализе Gemini: ${err.message}`);
+    throw err;
+  }
+}
