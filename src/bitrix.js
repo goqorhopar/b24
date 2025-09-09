@@ -10,17 +10,16 @@ export async function updateLead(report, leadId) {
 
   logger.info(`Обновляю лид ${leadId} через Bitrix24 webhook...`);
 
-  // Извлекаем имя клиента из отчета (первая строка до переноса)
-  const clientName = report.split('\n')[0].replace('Клиент:', '').trim();
+  // Извлекаем имя клиента из отчета
+  const firstLine = report.split('\n')[0];
+  const clientName = firstLine.startsWith('Клиент:') ? firstLine.replace('Клиент:', '').trim() : `Лид ${leadId}`;
   
-  // Формируем данные для обновления
+  // Формируем данные для обновления лида
   const payload = {
     id: leadId,
     fields: {
-      TITLE: clientName || `Лид ${leadId}`,
+      TITLE: clientName,
       COMMENTS: report,
-      // Добавляем UF_CRM_ поле для дедлайна, если нужно
-      UF_CRM_DEADLINE: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] // +3 дня
     }
   };
 
@@ -43,9 +42,11 @@ export async function updateLead(report, leadId) {
 async function createTask(leadId, clientName, webhookUrl) {
   const taskPayload = {
     fields: {
-      TITLE: `Следующий шаг по лиду: ${clientName || leadId}`,
+      TITLE: `Следующий шаг по лиду: ${clientName}`,
       DESCRIPTION: `Необходимо выполнить следующие действия по лиду ${leadId}`,
-      DEADLINE: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(), // +3 дня
+      CREATED_BY: 1, // ID пользователя, который создает задачу
+      RESPONSIBLE_ID: 1, // ID ответственного
+      DEADLINE: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // +3 дня
       UF_CRM_TASK: [`L_${leadId}`] // Привязываем задачу к лиду
     }
   };
