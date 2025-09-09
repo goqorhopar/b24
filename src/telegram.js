@@ -1,38 +1,30 @@
 import TelegramBot from 'node-telegram-bot-api';
+import express from 'express';
 import logger from './logger.js';
 import { analyzeTranscript } from './checklist.js';
 import { updateLead } from './bitrix.js';
 
-const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, {
-  polling: {
-    interval: 300,
-    autoStart: true,
-    params: {
-      timeout: 10
-    }
-  },
-  request: {
-    proxy: process.env.PROXY_URL || null,
-    agentOptions: {
-      keepAlive: true,
-      family: 4 // Принудительно использовать IPv4
-    }
+const app = express();
+app.use(express.json());
+
+const bot = new TelegramBot(process.env.TELEGRAM_TOKEN);
+const PORT = process.env.PORT || 3000;
+
+// Устанавливаем webhook при запуске
+async function setupWebhook() {
+  try {
+    const webhookUrl = `${process.env.RENDER_EXTERNAL_URL}/bot${process.env.TELEGRAM_TOKEN}`;
+    await bot.setWebHook(webhookUrl);
+    logger.info(`Webhook установлен: ${webhookUrl}`);
+  } catch (error) {
+    logger.error(`Ошибка установки webhook: ${error.message}`);
   }
-});
+}
 
-// Обработчик ошибок polling
-bot.on('polling_error', (error) => {
-  logger.error(`Polling error: ${error.message}`);
-  // Автоматически перезапускаем polling через 5 секунд
-  setTimeout(() => {
-    logger.info('Restarting polling...');
-    bot.startPolling();
-  }, 5000);
-});
-
-// Обработчик общих ошибок
-bot.on('error', (error) => {
-  logger.error(`General error: ${error.message}`);
+// Обработчик webhook
+app.post(`/bot${process.env.TELEGRAM_TOKEN}`, (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
 });
 
 // Временное хранилище данных по каждому чату
@@ -89,9 +81,14 @@ bot.on('message', async (msg) => {
   }
 });
 
+// Запускаем сервер
+app.listen(PORT, async () => {
+  logger.info(`🚀 Сервер запущен на порту ${PORT}`);
+  await setupWebhook();
+});
+
 // Обработчик закрытия процесса
 process.on('SIGINT', () => {
   logger.info('Останавливаем бота...');
-  bot.stopPolling();
   process.exit();
 });
