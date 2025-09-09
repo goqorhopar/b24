@@ -52,10 +52,13 @@ bot.on('message', async (msg) => {
 
       try {
         const report = await analyzeTranscript(transcript);
-        await bot.sendMessage(chatId, `📋 Отчет по встрече:\n\n${report}`);
-
+        await bot.sendMessage(chatId, `📋 Отчет по встрече:\n\n${report.substring(0, 4000)}...`);
+        
+        // Добавляем задержку перед обновлением лида
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
         await updateLead(report, leadId);
-        await bot.sendMessage(chatId, `🔥 Лид #${leadId} обновлен в Bitrix24`);
+        await bot.sendMessage(chatId, `🔥 Лид #${leadId} обновлен в Bitrix24 с полной информацией и задачами!`);
       } catch (err) {
         logger.error(err);
         await bot.sendMessage(chatId, "❌ Ошибка при обработке транскрипта или обновлении лида.");
