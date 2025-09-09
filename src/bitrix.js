@@ -40,25 +40,82 @@ export async function updateLead(report, leadId) {
 }
 
 async function createTask(leadId, clientName, webhookUrl) {
+  // Форматируем дату дедлайна (текущая дата + 3 дня)
+  const deadlineDate = new Date();
+  deadlineDate.setDate(deadlineDate.getDate() + 3);
+  const deadlineStr = deadlineDate.toISOString().split('T')[0];
+  
+  // Получаем текущего пользователя вебхука
+  let currentUserId = 1;
+  try {
+    const userRes = await axios.post(`${webhookUrl}/user.current.json`);
+    if (userRes.data.result) {
+      currentUserId = userRes.data.result.ID;
+    }
+  } catch (err) {
+    logger.warn(`Не удалось получить ID пользователя: ${err.message}`);
+  }
+
   const taskPayload = {
     fields: {
       TITLE: `Следующий шаг по лиду: ${clientName}`,
-      DESCRIPTION: `Необходимо выполнить следующие действия по лиду ${leadId}`,
-      CREATED_BY: 1, // ID пользователя, который создает задачу
-      RESPONSIBLE_ID: 1, // ID ответственного
-      DEADLINE: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // +3 дня
-      UF_CRM_TASK: [`L_${leadId}`] // Привязываем задачу к лиду
+      DESCRIPTION: `Необходимо выполнить следующие действия по лиду ${leadId}. Сгенерировано автоматически из анализа встречи.`,
+      CREATED_BY: currentUserId,
+      RESPONSIBLE_ID: currentUserId,
+      DEADLINE: deadlineStr,
+      UF_CRM_TASK: [`L_${leadId}`], // Привязываем задачу к лиду
+      // Дополнительные поля для лучшей совместимости
+      ENTITY_TYPE: 'LEAD',
+      ENTITY_ID: leadId
     }
   };
 
   try {
+    logger.info(`Создаю задачу для лида ${leadId}: ${JSON.stringify(taskPayload)}`);
+    
     const res = await axios.post(`${webhookUrl}/tasks.task.add.json`, taskPayload);
+    
     if (res.data.error) {
-      logger.error(`Ошибка при создании задачи: ${res.data.error_description}`);
+      logger.error(`Ошибка при создании задачи: ${JSON.stringify(res.data.error)}`);
+      
+      // Пробуем альтернативный метод создания задачи
+      await createTaskAlternative(leadId, clientName, webhookUrl, deadlineStr, currentUserId);
       return;
     }
-    logger.info(`✅ Задача для лида ${leadId} создана`);
+    
+    logger.info(`✅ Задача для лида ${leadId} создана: ${JSON.stringify(res.data.result)}`);
   } catch (err) {
     logger.error(`Ошибка при создании задачи для лида ${leadId}: ${err.message}`);
+    
+    // Пробуем альтернативный метод создания задачи
+    await createTaskAlternative(leadId, clientName, webhookUrl, deadlineStr, currentUserId);
+  }
+}
+
+// Альтернативный метод создания задачи (если первый не сработал)
+async function createTaskAlternative(leadId, clientName, webhookUrl, deadlineStr, userId) {
+  try {
+    const taskPayload = {
+      fields: {
+        TITLE: `Следующий шаг по лиду: ${clientName}`,
+        DESCRIPTION: `Необходимо выполнить следующие действия по лиду ${leadId}. Сгенерировано автоматически из анализа встречи.`,
+        CREATED_BY: userId,
+        RESPONSIBLE_ID: userId,
+        DEADLINE: deadlineStr,
+        // Альтернативный способ привязки к лиду
+        UF_CRM_TASK: leadId.toString()
+      }
+    };
+    
+    const res = await axios.post(`${webhookUrl}/task.item.add.json`, taskPayload);
+    
+    if (res.data.error) {
+      logger.error(`Ошибка при альтернативном создании задачи: ${JSON.stringify(res.data.error)}`);
+      return;
+    }
+    
+    logger.info(`✅ Задача создана альтернативным методом для лида ${leadId}`);
+  } catch (err) {
+    logger.error(`Ошибка при альтернативном создании задачи: ${err.message}`);
   }
 }
