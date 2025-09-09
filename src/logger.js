@@ -1,6 +1,6 @@
 import pino from 'pino';
 
-// Проверяем, работает ли код на Render.com
+// Проверяем, работает ли код на Render.com (в продакшене)
 const isProduction = process.env.NODE_ENV === 'production';
 
 const logger = pino({
