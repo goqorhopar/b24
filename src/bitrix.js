@@ -10,24 +10,54 @@ export async function updateLead(report, leadId) {
 
   logger.info(`Обновляю лид ${leadId} через Bitrix24 webhook...`);
 
-  const url = `${webhookUrl}/crm.lead.update.json`;
-
+  // Извлекаем имя клиента из отчета (первая строка до переноса)
+  const clientName = report.split('\n')[0].replace('Клиент:', '').trim();
+  
+  // Формируем данные для обновления
   const payload = {
     id: leadId,
     fields: {
-      COMMENTS: report
+      TITLE: clientName || `Лид ${leadId}`,
+      COMMENTS: report,
+      // Добавляем UF_CRM_ поле для дедлайна, если нужно
+      UF_CRM_DEADLINE: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] // +3 дня
     }
   };
 
   try {
-    const res = await axios.post(url, payload);
+    const res = await axios.post(`${webhookUrl}/crm.lead.update.json`, payload);
     if (res.data.error) {
       logger.error(`Bitrix24 error: ${res.data.error_description}`);
       throw new Error(res.data.error_description);
     }
     logger.info(`✅ Лид ${leadId} успешно обновлен`);
+    
+    // Создаем задачу
+    await createTask(leadId, clientName, webhookUrl);
   } catch (err) {
     logger.error(`Ошибка при обновлении лида ${leadId}: ${err.message}`);
     throw err;
+  }
+}
+
+async function createTask(leadId, clientName, webhookUrl) {
+  const taskPayload = {
+    fields: {
+      TITLE: `Следующий шаг по лиду: ${clientName || leadId}`,
+      DESCRIPTION: `Необходимо выполнить следующие действия по лиду ${leadId}`,
+      DEADLINE: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(), // +3 дня
+      UF_CRM_TASK: [`L_${leadId}`] // Привязываем задачу к лиду
+    }
+  };
+
+  try {
+    const res = await axios.post(`${webhookUrl}/tasks.task.add.json`, taskPayload);
+    if (res.data.error) {
+      logger.error(`Ошибка при создании задачи: ${res.data.error_description}`);
+      return;
+    }
+    logger.info(`✅ Задача для лида ${leadId} создана`);
+  } catch (err) {
+    logger.error(`Ошибка при создании задачи для лида ${leadId}: ${err.message}`);
   }
 }
