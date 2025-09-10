@@ -1,7 +1,7 @@
 // src/config.js
 
 // Проверка обязательных переменных окружения
-const requiredEnvVars = ['TELEGRAM_BOT_TOKEN', 'BITRIX_WEBHOOK_URL', 'BITRIX_RESPONSIBLE_ID', 'GEMINI_API_KEY'];
+const requiredEnvVars = ['TELEGRAM_BOT_TOKEN', 'BITRIX_WEBHOOK_URL', 'GEMINI_API_KEY'];
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
 
 if (missingEnvVars.length > 0) {
@@ -9,9 +9,9 @@ if (missingEnvVars.length > 0) {
   process.exit(1);
 }
 
-// Проверка числовых значений
-const responsibleId = Number(process.env.BITRIX_RESPONSIBLE_ID);
-if (isNaN(responsibleId)) {
+// BITRIX_RESPONSIBLE_ID теперь опциональный
+const responsibleId = process.env.BITRIX_RESPONSIBLE_ID ? Number(process.env.BITRIX_RESPONSIBLE_ID) : null;
+if (process.env.BITRIX_RESPONSIBLE_ID && isNaN(responsibleId)) {
   console.error('❌ BITRIX_RESPONSIBLE_ID должен быть числом');
   process.exit(1);
 }
@@ -31,7 +31,7 @@ if (isNaN(deadlineDays) || deadlineDays <= 0) {
   2. Bitrix24 Webhook URL - создать входящий вебхук в Bitrix24
   BITRIX_WEBHOOK_URL=https://your_domain.bitrix24.ru/rest/1/your_webhook_token
 
-  3. Bitrix Responsible User ID - ID пользователя для назначения задач
+  3. Bitrix Responsible User ID - ID пользователя для назначения задач (опционально)
   BITRIX_RESPONSIBLE_ID=123
 
   4. Gemini API Key - получить в Google AI Studio
@@ -56,7 +56,7 @@ export const config = {
   // Полный URL входящего вебхука Bitrix24
   bitrixWebhookUrl: process.env.BITRIX_WEBHOOK_URL,
 
-  // ID пользователя, на кого будут назначаться задачи
+  // ID пользователя, на кого будут назначаться задачи (опционально)
   bitrixResponsibleId: responsibleId,
 
   // ID пользователя, от имени которого будут создаваться задачи (по умолчанию = ответственному)
