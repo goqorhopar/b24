@@ -1,16 +1,11 @@
 {
   "name": "meeting-bot",
   "version": "1.0.0",
-  "description": "Telegram бот для анализа транскрипций встреч через Gemini и обновления лидов в Bitrix24",
+  "description": "Telegram бот для анализа транскрипций встреч",
   "main": "src/start.js",
   "type": "module",
   "scripts": {
-    "start": "node src/start.js",
-    "dev": "NODE_ENV=development node src/start.js",
-    "docker:build": "docker build -t meeting-bot .",
-    "docker:run": "docker run -p 3000:3000 --env-file .env meeting-bot",
-    "docker:compose": "docker-compose up",
-    "docker:compose:build": "docker-compose up --build"
+    "start": "node src/start.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.18.0",
@@ -22,17 +17,5 @@
   },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "keywords": [
-    "telegram",
-    "bot",
-    "bitrix24",
-    "gemini",
-    "ai",
-    "crm",
-    "meeting",
-    "analysis"
-  ],
-  "author": "Your Name",
-  "license": "MIT"
+  }
 }
