@@ -1,0 +1,179 @@
+# Файлы окружения с секретными данными
+.env
+.env.local
+.env.production
+.env.development
+
+# База данных SQLite
+*.db
+*.sqlite
+*.sqlite3
+bot_state.db
+data/
+
+# Логи
+logs/
+*.log
+*.log.*
+
+# Python кэш и bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Виртуальные окружения
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# IDE и редакторы
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Временные файлы
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Дистрибутивы и пакеты
+*.egg-info/
+dist/
+build/
+*.egg
+*.whl
+
+# Тестирование
+.coverage
+.pytest_cache/
+.tox/
+.cache
+htmlcov/
+.coverage.*
+coverage.xml
+*.cover
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Документация
+docs/_build/
+
+# Резервные копии
+*.bak
+*.backup
+
+# Системные файлы
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Atom
+.atom/
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Local configuration files
+local_settings.py
+settings_local.py
+
+# Media files (если есть загрузки файлов)
+media/
+uploads/
+static/media/
+
+# SSL сертификаты
+*.pem
+*.key
+*.crt
+*.csr
+
+# Временные файлы разработки
+scratch.py
+test.py
+debug.py
+temp.py
+
+# Файлы конфигурации специфичные для проекта
+config.local.json
+secrets.json
+
+# Файлы мониторинга и метрик
+*.pid
+newrelic.ini
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Ansible
+*.retry
+
+# Node.js (если используется для фронтенда)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Backup files
+*~
+*.orig
+*.rej
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Icon?
+ehthumbs.db
+Thumbs.db
