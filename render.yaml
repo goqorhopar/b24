@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: telegram-gemini-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn main:app --bind 0.0.0.0:$PORT --timeout 120
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: BITRIX_WEBHOOK_URL
+        sync: false
+      - key: ADMIN_CHAT_ID
+        sync: false
+      - key: LOG_LEVEL
+        value: info
