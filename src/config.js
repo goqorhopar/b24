@@ -25,6 +25,9 @@ if (isNaN(deadlineDays) || deadlineDays <= 0) {
 // Порт для сервера
 const port = Number(process.env.PORT || 3000);
 
+// ADMIN_CHAT_ID - опциональный, для уведомлений администратора
+const adminChatId = process.env.ADMIN_CHAT_ID ? Number(process.env.ADMIN_CHAT_ID) : null;
+
 /*
   НАСТРОЙКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ:
 
@@ -40,7 +43,10 @@ const port = Number(process.env.PORT || 3000);
   4. Gemini API Key - получить в Google AI Studio
   GEMINI_API_KEY=your_gemini_api_key
 
-  5. Опционально: переопределите коды полей лида, если они отличаются в вашем Bitrix24
+  5. Admin Chat ID - ID чата для уведомлений администратора
+  ADMIN_CHAT_ID=123456789
+
+  6. Опционально: переопределите коды полей лида, если они отличаются в вашем Bitrix24
   UF_WHAT_SELLS=UF_CRM_CUSTOM_FIELD
   UF_MEETING_HOST=UF_CRM_ANOTHER_FIELD
   ...
@@ -57,6 +63,9 @@ export const config = {
      =========================== */
   // Токен Telegram-бота от @BotFather
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
+
+  // ID чата администратора для уведомлений
+  adminChatId: adminChatId,
 
   /* ===========================
      🔹 Bitrix24
