@@ -24,6 +24,10 @@ function parseNumber(val) {
 }
 
 async function callBitrix(method, payload, logger) {
+  if (!BITRIX_WEBHOOK) {
+    throw new Error('BITRIX_WEBHOOK_URL не настроен');
+  }
+  
   const url = `${BITRIX_WEBHOOK}/${method}.json`;
   try {
     const { data } = await axios.post(url, payload, {
@@ -45,6 +49,10 @@ async function callBitrix(method, payload, logger) {
    Формирование полей лида
    =========================== */
 function buildLeadFields(a, transcript, sourceLabel, logger) {
+  if (!a || typeof a !== 'object') {
+    throw new Error('Анализ встречи должен быть объектом');
+  }
+
   const fields = {
     COMMENTS: sanitizeText(
       [
@@ -60,10 +68,9 @@ function buildLeadFields(a, transcript, sourceLabel, logger) {
     SOURCE_DESCRIPTION: sanitizeText(sourceLabel || 'Updated via Meeting Bot', 255)
   };
 
-  // Заполняем пользовательские поля UF_* из конфига
   if (FM.UF_WHAT_SELLS && a.whatSells) fields[FM.UF_WHAT_SELLS] = sanitizeText(a.whatSells, 500);
   if (FM.UF_MEETING_HOST && a.meetingHost) fields[FM.UF_MEETING_HOST] = sanitizeText(a.meetingHost, 255);
-  if (FM.UF_MEETING_PLANNED_AT && a.meetingPlannedAt) fields[FM.UF_MEETING_PLANNED_AT] = a.meetingPlannedAt; // ISO
+  if (FM.UF_MEETING_PLANNED_AT && a.meetingPlannedAt) fields[FM.UF_MEETING_PLANNED_AT] = a.meetingPlannedAt;
   if (FM.UF_INDUSTRY && a.industry) fields[FM.UF_INDUSTRY] = sanitizeText(a.industry, 255);
   if (FM.UF_DECISION_MAKERS && a.decisionMakers) fields[FM.UF_DECISION_MAKERS] = sanitizeText(a.decisionMakers, 4000);
   if (FM.UF_DECISION_TIMELINE && a.decisionTimeline) fields[FM.UF_DECISION_TIMELINE] = sanitizeText(a.decisionTimeline, 1000);
@@ -120,8 +127,8 @@ function buildActivityBody(a, transcript) {
 async function addActivityToLead(leadId, subject, description, logger) {
   const fields = {
     OWNER_ID: Number(leadId),
-    OWNER_TYPE_ID: 1, // Lead
-    TYPE_ID: 4,       // Note
+    OWNER_TYPE_ID: 1,
+    TYPE_ID: 4, // 4 = Задача (проверьте соответствие в вашем Bitrix24)
     SUBJECT: sanitizeText(subject, 255),
     DESCRIPTION: sanitizeText(description, 60000),
     DESCRIPTION_TYPE: 1
@@ -134,25 +141,46 @@ async function addActivityToLead(leadId, subject, description, logger) {
    =========================== */
 export async function updateLead(leadId, analysis, transcript, source, logger) {
   if (!leadId) throw new Error('leadId обязателен');
+  
   const fields = buildLeadFields(analysis, transcript, source, logger);
   await callBitrix('crm.lead.update', { id: String(leadId), fields }, logger);
 
-  // Добавляем активность с журналом анализа
   try {
     const title = `Анализ встречи (категория: ${analysis?.category || '—'})`;
     const body = buildActivityBody(analysis, transcript);
     await addActivityToLead(leadId, title, body, logger);
+    logger?.info?.({ leadId }, 'Активность добавлена к лиду');
   } catch (e) {
     logger?.warn?.({ leadId, error: e.message }, 'Не удалось добавить активность к лиду');
   }
 }
 
-export async function createTask({ title, description, leadId, source = 'Meeting Bot', responsibleId = RESPONSIBLE_ID, createdById = CREATED_BY_ID, deadline }, logger) {
+export async function createTask(
+  { title, description, leadId, source = 'Meeting Bot', responsibleId = RESPONSIBLE_ID, createdById = CREATED_BY_ID, deadline },
+  logger
+) {
   if (!leadId) throw new Error('leadId обязателен для привязки задачи');
   if (!responsibleId) throw new Error('BITRIX_RESPONSIBLE_ID обязателен');
 
-  const d = deadline ? new Date(deadline) : new Date();
+  let d = deadline ? new Date(deadline) : new Date();
   if (!deadline) {
-    d.setDate(d.getDate() + TASK_DEADLINE_DAYS
-    d.setHours(19, 0, 0, 0);
+    d.setDate(d.getDate() + TASK_DEADLINE_DAYS);
+    d.setUTCHours(16, 0, 0, 0); // 19:00 по Москве (UTC+3)
+  }
+
+  const fields = {
+    TITLE: sanitizeText(title || `Анализ встречи по лиду ${leadId}`, 255),
+    DESCRIPTION: sanitizeText(`${description || ''}\n\nИсточник: ${source}`, 59000),
+    RESPONSIBLE_ID: Number(responsibleId),
+    CREATED_BY: Number(createdById || responsibleId),
+    UF_CRM_TASK: [`L_${leadId}`],
+    DEADLINE: d.toISOString().replace('Z', '') // Формат для Bitrix
+  };
+
+  const result = await callBitrix('tasks.task.add', { fields }, logger);
+  const taskId = result?.task?.id || result?.taskId || result;
+  logger?.info?.({ leadId, taskId }, 'Задача создана');
+  return { taskId };
 }
+
+export const bitrixService = { updateLead, createTask };
