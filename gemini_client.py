@@ -18,13 +18,23 @@ if not GEMINI_API_KEY:
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Настройки безопасности — отключаем блокировки
-SAFETY_SETTINGS = {
-    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_SEXUAL: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-}
+# Универсальная сборка SAFETY_SETTINGS
+SAFETY_SETTINGS = {}
+
+if hasattr(HarmCategory, "HARM_CATEGORY_HATE_SPEECH"):
+    SAFETY_SETTINGS[getattr(HarmCategory, "HARM_CATEGORY_HATE_SPEECH")] = HarmBlockThreshold.BLOCK_NONE
+
+if hasattr(HarmCategory, "HARM_CATEGORY_HARASSMENT"):
+    SAFETY_SETTINGS[getattr(HarmCategory, "HARM_CATEGORY_HARASSMENT")] = HarmBlockThreshold.BLOCK_NONE
+
+if hasattr(HarmCategory, "HARM_CATEGORY_SEXUAL"):
+    SAFETY_SETTINGS[getattr(HarmCategory, "HARM_CATEGORY_SEXUAL")] = HarmBlockThreshold.BLOCK_NONE
+elif hasattr(HarmCategory, "HARM_CATEGORY_SEXUALLY_EXPLICIT"):
+    SAFETY_SETTINGS[getattr(HarmCategory, "HARM_CATEGORY_SEXUALLY_EXPLICIT")] = HarmBlockThreshold.BLOCK_NONE
+
+if hasattr(HarmCategory, "HARM_CATEGORY_DANGEROUS_CONTENT"):
+    SAFETY_SETTINGS[getattr(HarmCategory, "HARM_CATEGORY_DANGEROUS_CONTENT")] = HarmBlockThreshold.BLOCK_NONE
+
 
 def sanitize_transcript_for_safety(text: str) -> str:
     """
@@ -33,7 +43,6 @@ def sanitize_transcript_for_safety(text: str) -> str:
     """
     if not text:
         return text
-    # Пример: заменяем "секс" на "S*X", "эрот" на "эр."
     replacements = {
         r"\bсекс\w*\b": "S*X",
         r"\bэрот\w*\b": "эр.",
@@ -44,6 +53,7 @@ def sanitize_transcript_for_safety(text: str) -> str:
         clean = re.sub(pattern, repl, clean, flags=re.IGNORECASE)
     return clean
 
+
 def _prompt(transcript: str) -> str:
     return f"""
 Ты — эксперт по продажам. Проанализируй транскрипт по чеклисту и верни JSON с полями:
@@ -53,6 +63,7 @@ ad_budget, is_lpr, meeting_scheduled, meeting_done, kp_done_text, lpr_confirmed_
 Транскрипт:
 \"\"\"{transcript.strip()}\"\"\"
 """
+
 
 def analyze_transcript_structured(transcript: str) -> Tuple[str, Dict[str, Any]]:
     """
@@ -75,7 +86,7 @@ def analyze_transcript_structured(transcript: str) -> Tuple[str, Dict[str, Any]]
             if not text:
                 raise RuntimeError("Пустой ответ модели")
 
-            import json, re
+            import json
             json_candidates = re.findall(r'\{(?:[^{}]|(?R))*\}', text, flags=re.DOTALL)
             parsed = None
             for candidate in reversed(json_candidates):
@@ -102,7 +113,6 @@ def analyze_transcript_structured(transcript: str) -> Tuple[str, Dict[str, Any]]
             err_str = str(e)
             log.warning(f"Ошибка Gemini (попытка {attempt}/{MAX_RETRIES}): {err_str}")
 
-            # Если сработала модерация — пробуем повторно с очищенным текстом
             if "HARM_CATEGORY" in err_str.upper() or "SAFETY" in err_str.upper():
                 log.info("Повторная попытка с очищенным транскриптом...")
                 transcript = sanitize_transcript_for_safety(transcript)
@@ -112,3 +122,12 @@ def analyze_transcript_structured(transcript: str) -> Tuple[str, Dict[str, Any]]
             time.sleep(RETRY_DELAY)
 
     raise RuntimeError(f"Не удалось получить анализ от Gemini: {last_err}")
+
+
+def test_gemini_connection() -> bool:
+    try:
+        _ = analyze_transcript_structured("Мини-тест: клиент хочет увеличить лиды, бюджет 200к, ЛПР на связи.")
+        return True
+    except Exception as e:
+        log.warning(f"Тест Gemini провален: {e}")
+        return False
