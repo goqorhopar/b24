@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  meeting-bot:
+    build:
+      context: .
+      target: runtime
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - LOG_LEVEL=debug
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - BITRIX_RESPONSIBLE_ID=${BITRIX_RESPONSIBLE_ID}
+      - BITRIX_WEBHOOK_URL=${BITRIX_WEBHOOK_URL}
+      - ADMIN_CHAT_ID=${ADMIN_CHAT_ID}
+    volumes:
+      - ./src:/app/src
+      - /app/node_modules
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
