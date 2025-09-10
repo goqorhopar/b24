@@ -30,6 +30,14 @@ const bot = new TelegramBot(token, {
 
 logger.info('🚀 Telegram Bot запущен в режиме polling');
 
+// Отправляем уведомление админу при запуске
+if (config.adminChatId) {
+  bot.sendMessage(config.adminChatId, '🤖 Meeting Bot запущен и готов к работе!')
+    .catch(err => {
+      logger.error({ error: err.message }, 'Не удалось отправить уведомление админу');
+    });
+}
+
 // Команда /start
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
@@ -63,6 +71,36 @@ bot.onText(/\/help/, (msg) => {
     '• Бот имеет доступ к Bitrix24'
   ).catch(err => {
     logger.error({ chatId, error: err.message }, 'Ошибка отправки сообщения помощи');
+  });
+});
+
+// Команда /status для админа
+bot.onText(/\/status/, (msg) => {
+  const chatId = msg.chat.id;
+  
+  // Проверяем, что команда от админа
+  if (config.adminChatId && chatId !== config.adminChatId) {
+    bot.sendMessage(chatId, '❌ Эта команда только для администратора');
+    return;
+  }
+  
+  const memoryUsage = process.memoryUsage();
+  const uptime = process.uptime();
+  const hours = Math.floor(uptime / 3600);
+  const minutes = Math.floor((uptime % 3600) / 60);
+  const seconds = Math.floor(uptime % 60);
+  
+  const statusMessage = `
+🤖 Статус бота:
+• Память: ${Math.round(memoryUsage.heapUsed / 1024 / 1024)}MB / ${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB
+• Время работы: ${hours}ч ${minutes}м ${seconds}с
+• Активных сессий: ${userStates.size}
+• Версия: 1.0.0
+• Окружение: ${process.env.NODE_ENV || 'development'}
+  `.trim();
+  
+  bot.sendMessage(chatId, statusMessage).catch(err => {
+    logger.error({ chatId, error: err.message }, 'Ошибка отправки статуса');
   });
 });
 
@@ -143,6 +181,18 @@ bot.on('message', async (msg) => {
         '• Ответственный: пользователь #' + config.bitrixResponsibleId
       );
       
+      // Уведомляем админа о successful обработке
+      if (config.adminChatId) {
+        const adminMessage = `✅ Успешная обработка лида #${leadId}
+Чат: ${chatId}
+Пользователь: ${username}
+Длина транскрипта: ${state.transcript.length} символов
+Задача: #${taskId}`;
+        
+        bot.sendMessage(config.adminChatId, adminMessage)
+          .catch(err => logger.error({ error: err.message }, 'Не удалось уведомить админа'));
+      }
+      
     } catch (err) {
       logger.error({ chatId, error: err.message, stack: err.stack }, 'Ошибка анализа или обновления лида');
       
@@ -154,6 +204,18 @@ bot.on('message', async (msg) => {
       }
       
       await bot.sendMessage(chatId, errorMessage);
+      
+      // Уведомляем админа об ошибке
+      if (config.adminChatId) {
+        const errorAdminMessage = `❌ Ошибка обработки лида
+Чат: ${chatId}
+Пользователь: ${username}
+Ошибка: ${err.message}
+Транскрипт: ${state.transcript.substring(0, 100)}...`;
+        
+        bot.sendMessage(config.adminChatId, errorAdminMessage)
+          .catch(adminErr => logger.error({ error: adminErr.message }, 'Не удалось уведомить админа об ошибке'));
+      }
     } finally {
       userStates.delete(chatId);
       logger.info({ chatId }, 'Процесс завершён, состояние сброшено');
@@ -168,6 +230,12 @@ bot.on('polling_error', (error) => {
     code: error.code,
     response: error.response?.body 
   }, 'Polling error');
+  
+  // Уведомляем админа об ошибке polling
+  if (config.adminChatId) {
+    bot.sendMessage(config.adminChatId, `❌ Ошибка polling: ${error.message}`)
+      .catch(err => logger.error({ error: err.message }, 'Не удалось уведомить админа об ошибке polling'));
+  }
 });
 
 bot.on('webhook_error', (error) => {
@@ -178,11 +246,23 @@ bot.on('webhook_error', (error) => {
 process.on('SIGTERM', () => {
   logger.info('Останавливаем Telegram Bot...');
   bot.stopPolling();
+  
+  // Уведомляем админа об остановке
+  if (config.adminChatId) {
+    bot.sendMessage(config.adminChatId, '🛑 Бот остановлен (SIGTERM)')
+      .catch(err => logger.error({ error: err.message }, 'Не удалось уведомить админа об остановке'));
+  }
 });
 
 process.on('SIGINT', () => {
   logger.info('Останавливаем Telegram Bot...');
   bot.stopPolling();
+  
+  // Уведомляем админа об остановке
+  if (config.adminChatId) {
+    bot.sendMessage(config.adminChatId, '🛑 Бот остановлен (SIGINT)')
+      .catch(err => logger.error({ error: err.message }, 'Не удалось уведомить админа об остановке'));
+  }
 });
 
 /**
