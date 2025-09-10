@@ -2,6 +2,7 @@ import os
 import logging
 import time
 import re
+import json
 from typing import Dict, Any, Tuple
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
@@ -65,6 +66,26 @@ ad_budget, is_lpr, meeting_scheduled, meeting_done, kp_done_text, lpr_confirmed_
 """
 
 
+def extract_last_json(text: str) -> Tuple[Dict[str, Any], int]:
+    """
+    Ищет последний корректный JSON-объект в тексте.
+    Возвращает (dict, позиция_начала) или (None, -1).
+    """
+    last_json = None
+    last_pos = -1
+    # Ищем с конца текста
+    for start in range(len(text)):
+        if text[start] == '{':
+            try:
+                obj = json.loads(text[start:])
+                last_json = obj
+                last_pos = start
+                break
+            except Exception:
+                continue
+    return last_json, last_pos
+
+
 def analyze_transcript_structured(transcript: str) -> Tuple[str, Dict[str, Any]]:
     """
     Возвращает (analysis_text, data_dict) — человекочитаемый анализ и структурированные поля.
@@ -86,25 +107,13 @@ def analyze_transcript_structured(transcript: str) -> Tuple[str, Dict[str, Any]]
             if not text:
                 raise RuntimeError("Пустой ответ модели")
 
-            import json
-            json_candidates = re.findall(r'\{(?:[^{}]|(?R))*\}', text, flags=re.DOTALL)
-            parsed = None
-            for candidate in reversed(json_candidates):
-                try:
-                    parsed = json.loads(candidate)
-                    break
-                except Exception:
-                    continue
-
+            parsed, cut_index = extract_last_json(text)
             if not parsed or not isinstance(parsed, dict):
                 raise RuntimeError("Не удалось извлечь JSON из ответа модели")
 
             analysis_text = text
-            if json_candidates:
-                last = json_candidates[-1]
-                cut_index = analysis_text.rfind(last)
-                if cut_index > 0:
-                    analysis_text = analysis_text[:cut_index].strip()
+            if cut_index > 0:
+                analysis_text = analysis_text[:cut_index].strip()
 
             return analysis_text, parsed
 
