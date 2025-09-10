@@ -4,8 +4,8 @@ import { config } from './config.js';
 
 const FM = config.leadFieldMap || {};
 const BITRIX_WEBHOOK = (config.bitrixWebhookUrl || '').replace(/\/$/, '');
-const RESPONSIBLE_ID = Number(config.bitrixResponsibleId) || undefined;
-const CREATED_BY_ID = Number(config.bitrixCreatedById) || RESPONSIBLE_ID;
+const RESPONSIBLE_ID = config.bitrixResponsibleId ? Number(config.bitrixResponsibleId) : null;
+const CREATED_BY_ID = config.bitrixCreatedById ? Number(config.bitrixCreatedById) : RESPONSIBLE_ID;
 const TASK_DEADLINE_DAYS = Number(config.bitrixTaskDefaultDeadlineDays) || 3;
 
 /* ===========================
@@ -160,7 +160,10 @@ export async function createTask(
   logger
 ) {
   if (!leadId) throw new Error('leadId обязателен для привязки задачи');
-  if (!responsibleId) throw new Error('BITRIX_RESPONSIBLE_ID обязателен');
+  if (!responsibleId) {
+    logger?.warn?.('BITRIX_RESPONSIBLE_ID не задан, пропускаем создание задачи');
+    return { taskId: null };
+  }
 
   let d = deadline ? new Date(deadline) : new Date();
   if (!deadline) {
