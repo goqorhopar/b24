@@ -1,16 +1,62 @@
-import os, google.generativeai as genai
-genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-MODEL = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash')
+import os
+import logging
+import time
+from typing import Optional
+import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-def analyze_transcript(transcript: str) -> str:
-    system_prompt = (
-        "Ты эксперт по продажам. Проанализируй встречу по 12 пунктам: "
-        "1) Анализ бизнеса 2) Боли 3) Возражения 4) Реакция 5) Интерес "
-        "6) Возможности 7) Ошибки менеджера 8) Путь к закрытию 9) Тон "
-        "10) Контроль 11) Рекомендации 12) Категория. "
-        "Дай краткий отчёт с цитатами и итоговую категорию A/B/C + 3 шага next step."
-    )
-    model = genai.GenerativeModel(MODEL)
-    r = model.generate_content([system_prompt, transcript],
-        generation_config=genai.GenerationConfig(max_output_tokens=1200, temperature=0))
-    return r.text or str(r)
+# Настройка логирования
+log = logging.getLogger(__name__)
+
+# Конфигурация Gemini
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+MODEL_NAME = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash')
+MAX_RETRIES = 3
+RETRY_DELAY = 2
+
+if not GEMINI_API_KEY:
+    raise RuntimeError("GEMINI_API_KEY не найден в переменных окружения!")
+
+# Инициализация Gemini
+genai.configure(api_key=GEMINI_API_KEY)
+
+def get_analysis_prompt() -> str:
+    """Получение детального промпта для анализа"""
+    return """
+Ты эксперт по продажам с 20+ летним опытом. Проанализируй транскрипт встречи с клиентом по следующим критериям:
+
+**ОБЯЗАТЕЛЬНАЯ СТРУКТУРА АНАЛИЗА:**
+
+🏢 **1. АНАЛИЗ БИЗНЕСА КЛИЕНТА**
+- Какой у клиента бизнес, сфера деятельности
+- Размер компании, количество сотрудников
+- Текущая ситуация в бизнесе
+- Ключевые вызовы и задачи
+
+💔 **2. БОЛИ И ПРОБЛЕМЫ**
+- Основные болевые точки клиента
+- Проблемы, которые он хочет решить
+- Последствия нерешённых проблем
+- Срочность решения
+
+❌ **3. ВОЗРАЖЕНИЯ КЛИЕНТА**
+- Какие возражения озвучил клиент
+- Скрытые возражения (что не сказал прямо)
+- Причины сомнений
+- Страхи и опасения
+
+🎭 **4. РЕАКЦИЯ И ЭМОЦИОНАЛЬНОЕ СОСТОЯНИЕ**
+- Общее настроение клиента
+- Уровень заинтересованности
+- Эмоциональные реакции на предложения
+- Готовность к изменениям
+
+⭐ **5. УРОВЕНЬ ИНТЕРЕСА**
+- Насколько клиент заинтересован (1-10)
+- Что его больше всего заинтересовало
+- Какие вопросы задавал
+- Признаки готовности покупать
+
+💰 **6. ВОЗМОЖНОСТИ И БЮДЖЕТ**
+- Есть ли у клиента бюджет
+- Кто принимает
