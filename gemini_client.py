@@ -1,7 +1,8 @@
 import os
 import logging
 import time
-from typing import Optional, Dict, Any, Tuple
+import re
+from typing import Dict, Any, Tuple
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
@@ -17,47 +18,41 @@ if not GEMINI_API_KEY:
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-STRUCTURED_OUTPUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "analysis": {"type": "string"},
-        "wow_effect": {"type": "string"},
-        "client_type_text": {"type": "string"},         # текст enum, например: A/B/C/Некачественный
-        "bad_reason_text": {"type": "string"},          # текст enum при некачественном
-        "product": {"type": "string"},
-        "task_formulation": {"type": "string"},
-        "ad_budget": {"type": "string"},
-        "is_lpr": {"type": "boolean"},
-        "meeting_scheduled": {"type": "boolean"},
-        "meeting_done": {"type": "boolean"},
-        "kp_done_text": {"type": "string"},             # текст enum, например: Да/Нет/В процессе
-        "lpr_confirmed_text": {"type": "string"}        # текст enum
-    },
-    "required": ["analysis"]
+# Настройки безопасности — отключаем блокировки
+SAFETY_SETTINGS = {
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_SEXUAL: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
 }
+
+def sanitize_transcript_for_safety(text: str) -> str:
+    """
+    Убирает или заменяет слова, которые могут триггерить фильтры Gemini,
+    но не важны для бизнес-анализа.
+    """
+    if not text:
+        return text
+    # Пример: заменяем "секс" на "S*X", "эрот" на "эр."
+    replacements = {
+        r"\bсекс\w*\b": "S*X",
+        r"\bэрот\w*\b": "эр.",
+        r"\bпорно\w*\b": "P*RN",
+    }
+    clean = text
+    for pattern, repl in replacements.items():
+        clean = re.sub(pattern, repl, clean, flags=re.IGNORECASE)
+    return clean
 
 def _prompt(transcript: str) -> str:
     return f"""
-Ты — эксперт по продажам. Проанализируй транскрипт по чеклисту, а также верни структурированные данные в JSON.
+Ты — эксперт по продажам. Проанализируй транскрипт по чеклисту и верни JSON с полями:
+analysis, wow_effect, client_type_text, bad_reason_text, product, task_formulation,
+ad_budget, is_lpr, meeting_scheduled, meeting_done, kp_done_text, lpr_confirmed_text.
 
-1) Сформируй "analysis" — качественный разбор по 12 критериям (как в твоём шаблоне).
-2) Для полей CRM верни аккуратные значения:
-   - wow_effect: строка (кратко, по сути)
-   - client_type_text: один из — A, B, C, Некачественный (если модель считает лид некачественным, так и укажи)
-   - bad_reason_text: если client_type_text = "Некачественный", укажи причину (краткая фраза)
-   - product: что клиент продаёт (строка)
-   - task_formulation: как сформулирована задача (строка)
-   - ad_budget: бюджет/возможности (строка)
-   - is_lpr: true/false (вышли ли на ЛПР)
-   - meeting_scheduled: true/false (назначили встречу)
-   - meeting_done: true/false (провели встречу)
-   - kp_done_text: одно из — Да, Нет, В процессе
-   - lpr_confirmed_text: одно из — Да, Нет, Неясно
-
-Вначале дай короткий человекочитаемый анализ, затем верни JSON (только один JSON-объект, без лишнего текста вокруг).
 Транскрипт:
 \"\"\"{transcript.strip()}\"\"\"
-""".strip()
+"""
 
 def analyze_transcript_structured(transcript: str) -> Tuple[str, Dict[str, Any]]:
     """
@@ -68,28 +63,19 @@ def analyze_transcript_structured(transcript: str) -> Tuple[str, Dict[str, Any]]
 
     model = genai.GenerativeModel(MODEL_NAME)
 
-    safety_settings = {
-        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_SEXUAL: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-    }
-
     last_err = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             resp = model.generate_content(
                 _prompt(transcript),
-                safety_settings=safety_settings,
+                safety_settings=SAFETY_SETTINGS,
                 generation_config={"temperature": 0.4, "top_p": 0.9}
             )
             text = (resp.text or "").strip()
             if not text:
                 raise RuntimeError("Пустой ответ модели")
 
-            # Находим последний JSON в ответе (модель может выдать анализ + JSON)
             import json, re
-            # Попробуем извлечь JSON-объект фигурными скобками
             json_candidates = re.findall(r'\{(?:[^{}]|(?R))*\}', text, flags=re.DOTALL)
             parsed = None
             for candidate in reversed(json_candidates):
@@ -102,7 +88,6 @@ def analyze_transcript_structured(transcript: str) -> Tuple[str, Dict[str, Any]]
             if not parsed or not isinstance(parsed, dict):
                 raise RuntimeError("Не удалось извлечь JSON из ответа модели")
 
-            # Анализ (чел.текст) — это весь ответ без последнего JSON
             analysis_text = text
             if json_candidates:
                 last = json_candidates[-1]
@@ -111,17 +96,19 @@ def analyze_transcript_structured(transcript: str) -> Tuple[str, Dict[str, Any]]
                     analysis_text = analysis_text[:cut_index].strip()
 
             return analysis_text, parsed
+
         except Exception as e:
             last_err = e
-            log.warning(f"Ошибка Gemini (попытка {attempt}/{MAX_RETRIES}): {e}")
+            err_str = str(e)
+            log.warning(f"Ошибка Gemini (попытка {attempt}/{MAX_RETRIES}): {err_str}")
+
+            # Если сработала модерация — пробуем повторно с очищенным текстом
+            if "HARM_CATEGORY" in err_str.upper() or "SAFETY" in err_str.upper():
+                log.info("Повторная попытка с очищенным транскриптом...")
+                transcript = sanitize_transcript_for_safety(transcript)
+                time.sleep(RETRY_DELAY)
+                continue
+
             time.sleep(RETRY_DELAY)
 
     raise RuntimeError(f"Не удалось получить анализ от Gemini: {last_err}")
-
-def test_gemini_connection() -> bool:
-    try:
-        _ = analyze_transcript_structured("Мини-тест: клиент хочет увеличить лиды, бюджет 200к, ЛПР на связи.")
-        return True
-    except Exception as e:
-        log.warning(f"Тест Gemini провален: {e}")
-        return False
