@@ -1,7 +1,13 @@
+// src/checklist.js
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import logger from "./logger.js";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Проверяем наличие API ключа
+if (!process.env.GEMINI_API_KEY) {
+  logger.warn('GEMINI_API_KEY не задан. Функционал анализа будет ограничен.');
+}
+
+const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY) : null;
 const generationConfig = {
   temperature: 0.7,
   topP: 0.8,
@@ -9,15 +15,15 @@ const generationConfig = {
   maxOutputTokens: 2048,
 };
 
-const model = genAI.getGenerativeModel({ 
+const model = genAI ? genAI.getGenerativeModel({ 
   model: "gemini-1.5-flash",
   generationConfig 
-});
+}) : null;
 
 export async function analyzeTranscript(transcript) {
   // Валидация входных данных
   if (!transcript || transcript.trim().length < 50) {
-    throw new Error('Транскрипт слишком короткий для анализа');
+    throw new Error('Транскрипт слишком короткий для анализа (минимум 50 символов)');
   }
   
   // Санитаризация транскрипта
@@ -28,6 +34,12 @@ export async function analyzeTranscript(transcript) {
   
   logger.info(`Анализируем транскрипт длиной ${transcript.length} символов`);
 
+  // Если нет ключа API, используем упрощенный анализ
+  if (!genAI) {
+    logger.warn('GEMINI_API_KEY не задан, использую упрощенный анализ');
+    return fallbackAnalysis(safeTranscript);
+  }
+
   const prompt = `
 # ЗАДАЧА: Анализ транскрипта встречи
 
@@ -35,7 +47,7 @@ export async function analyzeTranscript(transcript) {
 Ты - эксперт по продажам и переговорам. Анализируешь транскрипции встреч и выдаешь структурированные саммари.
 
 ## ИНСТРУКЦИИ
-В начале ответа всегда указывай имя клиента в формате: "Клиент: [Имя Фамилия]"
+Верни ответ в формате Markdown с четкой структурой.
 
 ## ПУНКТЫ ДЛЯ АНАЛИЗА
 1. АНАЛИЗ ТЕКУЩЕГО БИЗНЕСА КЛИЕНТА (чем занимается, основные продукты/услуги, ниша)
@@ -45,11 +57,11 @@ export async function analyzeTranscript(transcript) {
 5. ОСОБЫЙ ИНТЕРЕС К СЕРВИСУ (что конкретно заинтересовало, приоритеты клиента)
 6. НАЙДЕННЫЕ ВОЗМОЖНОСТИ (потенциальные точки роста, дополнительные услуги)
 7. ОШИБКИ МЕНЕДЖЕРА (что можно было сделать лучше в продаже)
-8. ПУТЬ К ЗАКРЫТИЮ (конкретные шаги к продаже, этапы сделки)
+8. ПУТЬ К ЗАКРЫТИУ (конкретные шаги к продаже, этапы сделки)
 9. ТОН БЕСЕДЫ (настроение клиента, уровень вовлеченности, эмоции)
 10. КОНТРОЛЬ ДИАЛОГА (кто управлял разговором, баланс в диалоге)
 11. РЕКОМЕНДАЦИИ (конкретные действия для менеджера, план работы)
-12. КАТЕГОРИЯ КЛИЕНТА (холодный/теплый/горячий, потенциальный объем сделки, бюджет)
+12. КАТЕГОРИЯ КЛИЕНТА (A/B/C - горячий/теплый/холодный)
 
 ## ДОПОЛНИТЕЛЬНАЯ ИНФОРМАЦИЯ
 - Определи основной продукт/услугу, которую обсуждали
@@ -85,6 +97,36 @@ ${safeTranscript}
       errorCode: err.code,
       stack: err.stack 
     });
-    throw err;
+    // В случае ошибки возвращаем fallback анализ
+    return fallbackAnalysis(safeTranscript);
   }
+}
+
+// Упрощенный анализ если Gemini недоступен
+function fallbackAnalysis(transcript) {
+  const shortTranscript = transcript.length > 1000 
+    ? transcript.substring(0, 1000) + '...' 
+    : transcript;
+  
+  return `
+# АНАЛИЗ ВСТРЕЧИ (УПРОЩЕННЫЙ)
+
+## ОСНОВНАЯ ИНФОРМАЦИЯ
+Транскрипт был проанализирован в упрощенном режиме (требуется настройка GEMINI_API_KEY для полного анализа).
+
+## КЛЮЧЕВЫЕ МОМЕНТЫ
+- Транскрипт содержит ${transcript.length} символов
+- Рекомендуется ручной анализ менеджером
+- Для автоматического анализа требуется настройка API-ключа Gemini
+
+## РЕКОМЕНДАЦИИ
+1. Проведите ручной анализ транскрипта
+2. Определите основные боли клиента
+3. Выявите возражения и сомнения
+4. Оцените вероятность сделки
+5. Определите следующие шаги
+
+## ФРАГМЕНТ ТРАНСКРИПТА
+${shortTranscript}
+`;
 }
