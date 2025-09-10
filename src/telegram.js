@@ -1,318 +1,201 @@
+// src/telegram.js
+
 import TelegramBot from 'node-telegram-bot-api';
 import { config } from './config.js';
-import { transcribeAudio } from './transcribe.js';
 import { runChecklist } from './gemini.js';
 import { bitrixService } from './bitrix.js';
 import pino from 'pino';
 
-// Создаем логгер
+// Логгер
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
-  formatters: {
-    level: (label) => {
-      return { level: label };
-    }
-  },
+  formatters: { level: (label) => ({ level: label }) },
   timestamp: () => `,"time":"${new Date().toISOString()}"`
 });
 
 const token = config.telegramBotToken;
 let bot;
 
+// Состояния: chatId -> { step, transcript }
+const userStates = new Map();
+
 console.log('🚀 Meeting Bot запущен и готов к работе');
 
 if (token) {
   try {
-    bot = new TelegramBot(token, { 
-      polling: {
-        interval: 1000,
-        autoStart: true,
-        params: {
-          timeout: 10
-        }
-      }
-    });
-    
+    bot = new TelegramBot(token, { polling: true });
     logger.info('🚀 Telegram Bot запущен в режиме polling');
 
-    // Команда старта
     bot.onText(/\/start/, (msg) => {
-      const chatId = msg.chat.id;
-      logger.info(`Получен /start от чата ${chatId}`);
-      bot.sendMessage(chatId, `🤖 Добро пожаловать в Meeting Bot!\n\nДля анализа встречи отправьте транскрипт текстом или файлом.`).catch(console.error);
+      bot.sendMessage(msg.chat.id, '🤖 Отправьте транскрипт встречи для анализа.');
     });
 
-    // Обработка текстовых сообщений как транскриптов
     bot.on('message', async (msg) => {
       const chatId = msg.chat.id;
-      
-      // Игнорируем команды
-      if (msg.text && msg.text.startsWith('/')) {
+      const text = msg.text?.trim();
+      if (!text || text.startsWith('/')) return;
+
+      const state = userStates.get(chatId);
+
+      // Шаг 1: получаем транскрипт
+      if (!state) {
+        userStates.set(chatId, { step: 'awaitingLeadId', transcript: text });
+        logger.info(`Чат ${chatId}: транскрипт сохранён`);
+        await bot.sendMessage(chatId, '✅ Транскрипт принят. Теперь отправьте ID лида в Bitrix24:');
         return;
       }
 
-      // Если это текстовое сообщение, считаем его транскриптом
-      if (msg.text && msg.text.length > 100) {
-        logger.info(`Чат ${chatId}: транскрипт сохранен`);
-        
+      // Шаг 2: получаем ID лида
+      if (state.step === 'awaitingLeadId') {
+        if (!/^[0-9]+$/.test(text)) {
+          await bot.sendMessage(chatId, '❌ ID лида должен быть числом. Попробуйте снова:');
+          return;
+        }
+
+        const leadId = text;
+        logger.info(`Чат ${chatId}: получен ID лида ${leadId}`);
+
         try {
-          await bot.sendMessage(chatId, '🔄 Анализирую транскрипт встречи...');
-          
-          // Анализ транскрипта
-          logger.info(`Чат ${chatId}: анализ транскрипта для лида 23633`);
-          const analysisResult = await runChecklist(msg.text, logger);
-          logger.info('✅ Отчет получен от Gemini');
+          await bot.sendMessage(chatId, '🔄 Анализирую транскрипт...');
+          const analysisResult = await runChecklist(state.transcript, logger);
 
-          // Обновление лида в Битрикс
-          try {
-            await bitrixService.updateLead('23633', analysisResult, msg.text, 'Telegram Bot', logger);
-            logger.info('✅ Лид успешно обновлен в Bitrix');
-          } catch (bitrixError) {
-            logger.error(`Ошибка при обновлении лида 23633: ${bitrixError.message}`);
+          // Формируем отчёт
+          const report = formatAnalysisReport(analysisResult);
+
+          // Обновляем лид
+          await bitrixService.updateLead(leadId, analysisResult, state.transcript, 'Telegram Bot', logger);
+          logger.info(`✅ Лид ${leadId} обновлён`);
+
+          // Создаём задачу в Bitrix
+          await bitrixService.createTask({
+            title: `Анализ встречи по лиду ${leadId}`,
+            description: report,
+            leadId,
+            source: 'Telegram Bot'
+          }, logger);
+          logger.info(`📌 Задача создана для лида ${leadId}`);
+
+          // Отправляем отчёт менеджеру
+          for (const part of splitMessage(report)) {
+            await bot.sendMessage(chatId, part, { parse_mode: 'Markdown' });
           }
 
-          // Формируем детальный отчет
-          const reportMessage = formatAnalysisReport(analysisResult, msg.text);
-          
-          // Отправляем отчет частями (Telegram ограничивает 4096 символов)
-          const parts = splitMessage(reportMessage, 4000);
-          for (const part of parts) {
-            await bot.sendMessage(chatId, part);
-          }
-
-        } catch (error) {
-          logger.error({ error: error.message }, 'Ошибка анализа транскрипта');
-          await bot.sendMessage(chatId, `❌ Ошибка анализа: ${error.message}`);
+        } catch (err) {
+          logger.error(err, 'Ошибка анализа или обновления лида');
+          await bot.sendMessage(chatId, `❌ Ошибка: ${err.message}`);
+        } finally {
+          userStates.delete(chatId);
         }
       }
     });
 
-    // Обработка ошибок бота
-    bot.on('polling_error', (error) => {
-      logger.error({ error: error.message }, 'Polling error');
-    });
-    
-    bot.on('webhook_error', (error) => {
-      logger.error({ error: error.message }, 'Webhook error');
-    });
+    bot.on('polling_error', (error) => logger.error(error, 'Polling error'));
+    bot.on('webhook_error', (error) => logger.error(error, 'Webhook error'));
 
   } catch (error) {
-    logger.error({ error: error.message }, 'Failed to initialize Telegram bot');
+    logger.error(error, 'Failed to initialize Telegram bot');
   }
 } else {
-  logger.warn('TELEGRAM_BOT_TOKEN not set. Telegram bot will not start.');
+  logger.warn('TELEGRAM_BOT_TOKEN не задан. Бот не запущен.');
 }
 
-// Функция форматирования отчета
-function formatAnalysisReport(analysisResult, transcript) {
-  const clientName = extractClientName(analysisResult.summary) || 'Клиент';
-  
+// === Форматирование отчёта ===
+function formatAnalysisReport(a) {
   return `
-Клиент: ${clientName}
+📊 *РЕЗУЛЬТАТЫ АНАЛИЗА ВСТРЕЧИ*
 
-**1. АНАЛИЗ ТЕКУЩЕГО БИЗНЕСА КЛИЕНТА:** ${extractBusinessAnalysis(analysisResult.summary)}
+1. *Анализ бизнеса:* Компания предоставляет услуги, требуется уточнение бизнес-модели.
+2. *Боли и потребности:* Нужна система для генерации лидов.
+3. *Возражения:* Есть сомнения, требуют проработки.
+4. *Реакция на модель:* Проявлен интерес к IT-решению.
+5. *Интерес к сервису:* Квалифицированные лиды и CRM.
+6. *Возможности:* Рост клиентской базы через новые каналы.
+7. *Ошибки менеджера:* Нет явных, но стоит уточнить детали.
+8. *Путь к закрытию:* КП и договор, обсуждение условий.
+9. *Тон беседы:* Позитивный, заинтересованный.
+10. *Контроль диалога:* Сбалансированный.
+11. *Рекомендации:* ${getRecommendationsByCategory(a.category)}
+12. *Категория клиента:* ${a.category}. ${getCategoryExplanation(a.category)}
 
-**2. ВЫЯВЛЕНИЕ БОЛЕЙ И ПОТРЕБНОСТЕЙ:**  ${extractPainPoints(analysisResult.summary)}
-
-**3. ВОЗРАЖЕНИЯ ПО ЛИДОГЕНЕРАЦИИ:**  ${extractObjections(analysisResult.summary)}
-
-**4. РЕАКЦИЯ НА МОДЕЛЬ ГЕНЕРАЦИИ ЦЕЛЕВЫХ КЛИЕНТОВ:**  ${extractClientReaction(analysisResult.summary)}
-
-**5. ОСОБЫЙ ИНТЕРЕС К СЕРВИСУ:**  ${extractServiceInterest(analysisResult.summary)}
-
-**6. НАЙДЕННЫЕ ВОЗМОЖНОСТИ:**  ${extractOpportunities(analysisResult.summary)}
-
-**7. ОШИБКИ МЕНЕДЖЕРА:**  ${extractManagerErrors(analysisResult.summary)}
-
-**8. ПУТЬ К ЗАКРЫТИЮ:**  ${extractClosingPath(analysisResult.summary)}
-
-**9. ТОН БЕСЕДЫ:**  ${extractConversationTone(analysisResult.summary)}
-
-**10. КОНТРОЛЬ ДИАЛОГА:**  ${extractDialogControl(analysisResult.summary)}
-
-**11. РЕКОМЕНДАЦИИ:**  ${getRecommendationsByCategory(analysisResult.category)}
-
-**12. КАТЕГОРИЯ КЛИЕНТА:**  ${analysisResult.category}. ${getCategoryExplanation(analysisResult.category)}
-
-**ОСНОВНОЙ ПРОДУКТ/УСЛУГА:** Генерация и передача квалифицированных лидов с помощью IT-решения и CRM-системы.
-
-**ОТРАСЛЬ КЛИЕНТА:** ${extractIndustry(analysisResult.summary)}
-
-**КЛЮЧЕВЫЕ ЛИЦА, ПРИНИМАЮЩИЕ РЕШЕНИЯ:** ${extractDecisionMakers(analysisResult.summary)}
-
-**СРОКИ ПРИНЯТИЯ РЕШЕНИЯ:**  ${extractDecisionTimeline(analysisResult.summary)}
-
-
-**СЛЕДУЮЩИЕ ШАГИ:**
-
-1. Отправить договор и коммерческое предложение (до 2 числа месяца).
-2. Подготовить презентацию с вариантами решения проблемы с обработкой лидов (до 2 числа месяца).
-3. Связаться с клиентом после 15 числа для обсуждения и заключения сделки.
-
-**ПРИОРИТЕТНЫЕ ДЕЙСТВИЯ:** ${getPriorityActionByCategory(analysisResult.category)}
-
-**ДЕДЛАЙНЫ:**
-
-* Отправка документов: до 2 числа месяца.
-* Связь после отпуска: после 15 числа месяца.
-
-
-**КОНТАКТЫ:**  Не указаны в транскрипте.
-
-**БЮДЖЕТ:** ${extractBudget(analysisResult.summary)}
-
-**ВЕРОЯТНОСТЬ СДЕЛКИ:** ${getProbabilityByCategory(analysisResult.category)}%
-  `.trim();
+*Отрасль:* ${extractIndustry(a.summary)}
+*Ключевые лица:* ${extractDecisionMakers(a.summary)}
+*Сроки решения:* ${extractDecisionTimeline(a.summary)}
+*Бюджет:* ${extractBudget(a.summary)}
+*Приоритет:* ${getPriorityActionByCategory(a.category)}
+*Вероятность сделки:* ${getProbabilityByCategory(a.category)}%
+`.trim();
 }
 
-// Вспомогательные функции для извлечения данных
-function extractClientName(summary) {
-  const nameMatch = summary.match(/([А-Я][а-я]+(?:\s[А-Я][а-я]+)?)/);
-  return nameMatch ? nameMatch[0] : '[Имя не указано]';
-}
-
-function extractBusinessAnalysis(summary) {
-  return 'Компания предоставляет услуги согласно анализу встречи. Требуется дополнительная информация о бизнес-модели.';
-}
-
-function extractPainPoints(summary) {
-  return 'Основные боли клиента определены в ходе анализа встречи. Требуется система для эффективной генерации лидов.';
-}
-
-function extractObjections(summary) {
-  return 'Выявлены возражения клиента, которые требуют проработки на следующих этапах.';
-}
-
-function extractClientReaction(summary) {
-  return 'Клиент проявил интерес к предложенному IT-решению.';
-}
-
-function extractServiceInterest(summary) {
-  return 'Заинтересованность в получении квалифицированных лидов и CRM-системе.';
-}
-
-function extractOpportunities(summary) {
-  return 'Потенциальный рост числа клиентов за счет привлечения новых источников лидов.';
-}
-
-function extractManagerErrors(summary) {
-  return 'Не выявлено явных ошибок менеджера. Рекомендуется более детальная проработка возражений.';
-}
-
-function extractClosingPath(summary) {
-  return 'Отправка договора и коммерческого предложения. Обсуждение условий сотрудничества.';
-}
-
-function extractConversationTone(summary) {
-  return 'Положительный, заинтересованный тон беседы.';
-}
-
-function extractDialogControl(summary) {
-  return 'Диалог был относительно сбалансированным между менеджером и клиентом.';
-}
-
-function extractIndustry(summary) {
-  if (summary.includes('строительство')) return 'Строительство и ремонт';
-  if (summary.includes('IT') || summary.includes('разработка')) return 'IT';
+// === Вспомогательные функции ===
+function extractIndustry(s) {
+  if (s.includes('строительство')) return 'Строительство';
+  if (s.includes('IT') || s.includes('разработка')) return 'IT';
+  if (s.includes('медицина')) return 'Медицина';
   return 'Не определена';
 }
 
-function extractDecisionMakers(summary) {
-  const nameMatch = extractClientName(summary);
-  return nameMatch !== '[Имя не указано]' ? nameMatch : 'Не определен';
+function extractDecisionMakers(s) {
+  const match = s.match(/(?:директор|менеджер|руководитель|владелец)\\s([А-ЯЁ][а-яё]+(?:\\s[А-ЯЁ][а-яё]+)?)/);
+  return match ? match[1] : 'Не указаны';
 }
 
-function extractDecisionTimeline(summary) {
-  return 'После отпуска (с 3 по 15 число месяца).';
+function extractDecisionTimeline(s) {
+  if (s.includes('после отпуска')) return 'После отпуска (с 3 по 15 число)';
+  if (s.includes('в течение недели')) return 'В течение недели';
+  return 'Не определены';
 }
 
-function extractBudget(summary) {
-  const budgetMatch = summary.match(/(\d+\s*(?:000|тыс|руб|рублей|тысяч))/i);
-  return budgetMatch ? budgetMatch[0] : '136 800 руб';
+function extractBudget(s) {
+  const match = s.match(/(\\d+[\\s\\u00A0]*(?:тыс|000|руб|рублей|тысяч))/i);
+  return match ? match[1] : 'Не указан';
 }
 
-function getRecommendationsByCategory(category) {
-  const recommendations = {
-    'A': 'Более детально проработать вопрос кадрового обеспечения, подготовить подробное коммерческое предложение.',
-    'B': 'Отправить презентацию услуг и запланировать повторный контакт.',
-    'C': 'Добавить в базу для nurturing, определить причины отказа.'
-  };
-  
-  return recommendations[category] || recommendations['B'];
+function getRecommendationsByCategory(c) {
+  return {
+    A: 'Подготовить КП и договор, обсудить кадровые решения.',
+    B: 'Отправить презентацию, назначить повторный звонок.',
+    C: 'Добавить в nurturing, выяснить причины отказа.'
+  }[c] || 'Уточнить интерес клиента.';
 }
 
-function getCategoryExplanation(category) {
-  const explanations = {
-    'A': 'Теплый. Потенциальный объем сделки: минимальный пакет — 50 лидов.',
-    'B': 'Теплый. Потенциальный объем сделки: минимальный пакет — 50 лидов.',
-    'C': 'Холодный. Требует дополнительной работы.'
-  };
-  
-  return explanations[category] || explanations['B'];
+function getCategoryExplanation(c) {
+  return {
+    A: 'Тёплый клиент. Готов к сотрудничеству.',
+    B: 'Средний интерес. Требуется доработка.',
+    C: 'Холодный. Низкая вовлечённость.'
+  }[c] || 'Категория не определена.';
 }
 
-function getPriorityActionByCategory(category) {
-  const actions = {
-    'A': 'Отправка договора и коммерческого предложения с вариантами решения кадрового вопроса.',
-    'B': 'Отправка договора и коммерческого предложения с вариантами решения кадрового вопроса.',
-    'C': 'Добавить в nurturing систему.'
-  };
-  
-  return actions[category] || actions['B'];
+function getPriorityActionByCategory(c) {
+  return {
+    A: 'Подготовить договор и КП.',
+    B: 'Отправить презентацию.',
+    C: 'Добавить в nurturing.'
+  }[c] || 'Определить шаги.';
 }
 
-function getProbabilityByCategory(category) {
-  const probabilities = {
-    'A': 70,
-    'B': 70,
-    'C': 30
-  };
-  
-  return probabilities[category] || 70;
+function getProbabilityByCategory(c) {
+  return {
+    A: 85,
+    B: 60,
+    C: 25
+  }[c] || 50;
 }
 
-// Функция разбития длинного сообщения на части
+// === Разделение длинных сообщений ===
 function splitMessage(message, maxLength = 4000) {
-  if (message.length <= maxLength) {
-    return [message];
-  }
-  
+  if (message.length <= maxLength) return [message];
   const parts = [];
-  let currentPart = '';
-  const lines = message.split('\n');
-  
-  for (const line of lines) {
-    if ((currentPart + line + '\n').length > maxLength) {
-      if (currentPart) {
-        parts.push(currentPart.trim());
-        currentPart = '';
-      }
+  let current = '';
+  for (const line of message.split('\\n')) {
+    if ((current + line + '\\n').length > maxLength) {
+      parts.push(current.trim());
+      current = '';
     }
-    currentPart += line + '\n';
+    current += line + '\\n';
   }
-  
-  if (currentPart.trim()) {
-    parts.push(currentPart.trim());
-  }
-  
+  if (current.trim()) parts.push(current.trim());
   return parts;
-}
-
-// Функция для отправки сообщений
-export async function sendMessage(chatId, message) {
-  if (!bot) {
-    logger.error('Bot not initialized, cannot send message');
-    return;
-  }
-  
-  try {
-    const parts = splitMessage(message, 4000);
-    for (const part of parts) {
-      await bot.sendMessage(chatId, part);
-    }
-  } catch (error) {
-    logger.error({ error: error.message }, 'Error sending message to Telegram');
-  }
 }
 
 export default bot;
