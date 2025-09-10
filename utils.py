@@ -1,3 +1,15 @@
+import re
+from typing import Optional
+
+def sanitize_text(text: str, max_length: Optional[int] = None) -> str:
+    if not text:
+        return ""
+    # Telegram-safe sanitize (минимально)
+    text = re.sub(r'\s+', ' ', text.strip())
+    if max_length and len(text) > max_length:
+        text = text[:max_length] + '...'
+    return text
+
 import os
 import re
 import time
