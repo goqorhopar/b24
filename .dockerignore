@@ -10,3 +10,6 @@ README.md
 coverage
 *.tar.gz
 *.zip
+.docker
+.github
+.vscode
