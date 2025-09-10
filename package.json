@@ -2,10 +2,11 @@
   "name": "meeting-bot",
   "version": "1.0.0",
   "description": "Telegram бот для анализа транскрипций встреч через Gemini и обновления лидов в Bitrix24",
-  "main": "src/telegram.js",
+  "main": "src/start.js",
   "type": "module",
   "scripts": {
-    "start": "node src/telegram.js"
+    "start": "node src/start.js",
+    "dev": "node src/start.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.18.0",
