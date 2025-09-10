@@ -7,7 +7,16 @@
   "scripts": {
     "start": "node src/start.js",
     "dev": "NODE_ENV=development node src/start.js",
-    "test": "echo \"No tests specified\" && exit 0"
+    "build": "echo 'No build step required'",
+    "test": "echo 'No tests specified' && exit 0",
+    "docker:build": "docker build -t meeting-bot .",
+    "docker:run": "docker run -p 3000:3000 --env-file .env meeting-bot",
+    "docker:compose": "docker-compose up",
+    "docker:compose:build": "docker-compose up --build",
+    "docker:compose:dev": "docker-compose -f docker-compose.dev.yml up",
+    "docker:compose:dev:build": "docker-compose -f docker-compose.dev.yml up --build",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix"
   },
   "dependencies": {
     "@google/generative-ai": "^0.18.0",
@@ -16,6 +25,10 @@
     "node-telegram-bot-api": "^0.66.0",
     "pino": "^9.3.2",
     "pino-pretty": "^11.2.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "eslint-plugin-node": "^11.1.0"
   },
   "engines": {
     "node": ">=18.0.0"
