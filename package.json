@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/start.js",
-    "dev": "node src/start.js"
+    "dev": "NODE_ENV=development node src/start.js",
+    "test": "echo \"No tests specified\" && exit 0"
   },
   "dependencies": {
     "@google/generative-ai": "^0.18.0",
@@ -18,5 +19,17 @@
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "bitrix24",
+    "gemini",
+    "ai",
+    "crm",
+    "meeting",
+    "analysis"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
 }
