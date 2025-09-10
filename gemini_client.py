@@ -294,7 +294,8 @@ def analyze_with_metrics(transcript: str) -> tuple[str, dict]:
             'error': str(e)
         }
         
-        raise Exception(str(e)), metrics
+        # Исправленная строка: используем правильный синтаксис Python 3
+        raise Exception(f"Ошибка анализа с метриками: {str(e)}") from e
 
 def get_usage_stats() -> dict:
     """Получение статистики использования API"""
