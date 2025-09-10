@@ -1,7 +1,7 @@
 // src/config.js
 
 // Проверка обязательных переменных окружения
-const requiredEnvVars = ['TELEGRAM_BOT_TOKEN', 'BITRIX_WEBHOOK_URL', 'GEMINI_API_KEY'];
+const requiredEnvVars = ['TELEGRAM_BOT_TOKEN', 'BITRIX_WEBHOOK_URL', 'GEMINI_API_KEY', 'BITRIX_RESPONSIBLE_ID'];
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
 
 if (missingEnvVars.length > 0) {
@@ -9,9 +9,9 @@ if (missingEnvVars.length > 0) {
   process.exit(1);
 }
 
-// BITRIX_RESPONSIBLE_ID теперь опциональный
-const responsibleId = process.env.BITRIX_RESPONSIBLE_ID ? Number(process.env.BITRIX_RESPONSIBLE_ID) : null;
-if (process.env.BITRIX_RESPONSIBLE_ID && isNaN(responsibleId)) {
+// BITRIX_RESPONSIBLE_ID - обязательный для создания задач
+const responsibleId = Number(process.env.BITRIX_RESPONSIBLE_ID);
+if (isNaN(responsibleId)) {
   console.error('❌ BITRIX_RESPONSIBLE_ID должен быть числом');
   process.exit(1);
 }
@@ -22,6 +22,9 @@ if (isNaN(deadlineDays) || deadlineDays <= 0) {
   process.exit(1);
 }
 
+// Порт для сервера
+const port = Number(process.env.PORT || 3000);
+
 /*
   НАСТРОЙКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ:
 
@@ -31,7 +34,7 @@ if (isNaN(deadlineDays) || deadlineDays <= 0) {
   2. Bitrix24 Webhook URL - создать входящий вебхук в Bitrix24
   BITRIX_WEBHOOK_URL=https://your_domain.bitrix24.ru/rest/1/your_webhook_token
 
-  3. Bitrix Responsible User ID - ID пользователя для назначения задач (опционально)
+  3. Bitrix Responsible User ID - ID пользователя для назначения задач (ОБЯЗАТЕЛЬНО)
   BITRIX_RESPONSIBLE_ID=123
 
   4. Gemini API Key - получить в Google AI Studio
@@ -45,6 +48,11 @@ if (isNaN(deadlineDays) || deadlineDays <= 0) {
 
 export const config = {
   /* ===========================
+     🔹 Server
+     =========================== */
+  port: port,
+
+  /* ===========================
      🔹 Telegram
      =========================== */
   // Токен Telegram-бота от @BotFather
@@ -56,7 +64,7 @@ export const config = {
   // Полный URL входящего вебхука Bitrix24
   bitrixWebhookUrl: process.env.BITRIX_WEBHOOK_URL,
 
-  // ID пользователя, на кого будут назначаться задачи (опционально)
+  // ID пользователя, на кого будут назначаться задачи (ОБЯЗАТЕЛЬНО)
   bitrixResponsibleId: responsibleId,
 
   // ID пользователя, от имени которого будут создаваться задачи (по умолчанию = ответственному)
