@@ -66,7 +66,7 @@ if (!token) {
         await bitrixService.updateLead(leadId, analysis, state.transcript, 'Telegram Bot', logger);
         logger.info({ leadId }, '✅ Лид обновлён в Bitrix');
 
-        // Создаём задачу
+        // Создаём задачу (если задан RESPONSIBLE_ID)
         try {
           const taskTitle = `Анализ встречи по лиду ${leadId} (${analysis.category || '—'})`;
           const { taskId } = await bitrixService.createTask({
@@ -75,7 +75,12 @@ if (!token) {
             leadId,
             source: 'Telegram Bot'
           }, logger);
-          logger.info({ leadId, taskId }, '📌 Задача создана и привязана к лиду');
+          
+          if (taskId) {
+            logger.info({ leadId, taskId }, '📌 Задача создана и привязана к лиду');
+          } else {
+            logger.info({ leadId }, 'ℹ️ Задача не создана (BITRIX_RESPONSIBLE_ID не задан)');
+          }
         } catch (taskErr) {
           logger.warn({ leadId, error: taskErr.message }, 'Не удалось создать задачу');
         }
@@ -84,6 +89,10 @@ if (!token) {
         for (const part of splitMessage(report)) {
           await bot.sendMessage(chatId, part, { parse_mode: 'Markdown' });
         }
+        
+        await bot.sendMessage(chatId, '✅ Готово! Лид обновлен в Bitrix24' + 
+          (config.bitrixResponsibleId ? ' и задача создана' : ''));
+        
       } catch (err) {
         logger.error({ err }, 'Ошибка анализа или обновления лида');
         await bot.sendMessage(chatId, `❌ Ошибка: ${err.message}`);
