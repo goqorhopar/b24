@@ -3,7 +3,7 @@ import logging
 import time
 import re
 import json
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
@@ -61,19 +61,55 @@ ad_budget, is_lpr, meeting_scheduled, meeting_done, kp_done_text, lpr_confirmed_
 """
 
 
-def extract_last_json(text: str) -> Tuple[Dict[str, Any], int]:
-    last_json = None
-    last_pos = -1
-    for start in range(len(text)):
-        if text[start] == '{':
-            try:
-                obj = json.loads(text[start:])
-                last_json = obj
-                last_pos = start
-                break
-            except Exception:
-                continue
-    return last_json, last_pos
+def extract_json_from_text(text: str) -> Tuple[Optional[Dict[str, Any]], int]:
+    """
+    Извлекает JSON из текста, ищет как последний JSON, так и JSON в markdown блоках.
+    Возвращает кортеж (parsed_json, start_index)
+    """
+    if not text:
+        return None, -1
+    
+    # Сначала попробуем найти JSON в markdown блоке (```json ... ```)
+    json_block_match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+    if json_block_match:
+        json_str = json_block_match.group(1).strip()
+        try:
+            return json.loads(json_str), json_block_match.start()
+        except json.JSONDecodeError:
+            log.warning("Найден JSON блок, но он содержит ошибки")
+    
+    # Ищем последний валидный JSON объект в тексте
+    brace_stack = []
+    json_start = -1
+    json_end = -1
+    
+    for i, char in enumerate(text):
+        if char == '{':
+            if not brace_stack:
+                json_start = i
+            brace_stack.append(char)
+        elif char == '}' and brace_stack:
+            brace_stack.pop()
+            if not brace_stack and json_start != -1:
+                json_end = i
+                json_str = text[json_start:json_end+1]
+                try:
+                    return json.loads(json_str), json_start
+                except json.JSONDecodeError:
+                    # Продолжаем поиск, если этот JSON невалиден
+                    json_start = -1
+                    json_end = -1
+    
+    # Если не нашли полный JSON, попробуем найти начало JSON
+    last_brace_pos = text.rfind('{')
+    if last_brace_pos != -1:
+        # Пробуем парсить от открывающей скобки до конца
+        try:
+            return json.loads(text[last_brace_pos:]), last_brace_pos
+        except json.JSONDecodeError:
+            pass
+    
+    return None, -1
 
 
 def analyze_transcript_structured(transcript: str) -> Tuple[str, Dict[str, Any]]:
@@ -94,12 +130,14 @@ def analyze_transcript_structured(transcript: str) -> Tuple[str, Dict[str, Any]]
             if not text:
                 raise RuntimeError("Пустой ответ модели")
 
-            parsed, cut_index = extract_last_json(text)
+            log.debug(f"Ответ Gemini (попытка {attempt}): {text[:500]}...")
+
+            parsed, cut_index = extract_json_from_text(text)
             if parsed and isinstance(parsed, dict):
                 analysis_text = text[:cut_index].strip() if cut_index > 0 else text
                 return analysis_text, parsed
             else:
-                log.warning("JSON не найден, возвращаю только текст анализа")
+                log.warning("JSON не найден в ответе, возвращаю только текст анализа")
                 return text, {}
 
         except Exception as e:
@@ -120,8 +158,8 @@ def analyze_transcript_structured(transcript: str) -> Tuple[str, Dict[str, Any]]
 
 def test_gemini_connection() -> bool:
     try:
-        _ = analyze_transcript_structured("Мини-тест: клиент хочет увеличить лиды, бюджет 200к, ЛПР на связи.")
-        return True
+        analysis, data = analyze_transcript_structured("Мини-тест: клиент хочет увеличить лиды, бюджет 200к, ЛПР на связи.")
+        return bool(analysis)
     except Exception as e:
         log.warning(f"Тест Gemini провален: {e}")
         return False
