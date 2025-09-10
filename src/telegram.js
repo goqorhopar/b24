@@ -1,111 +1,189 @@
 // src/telegram.js
 import TelegramBot from 'node-telegram-bot-api';
-import pino from 'pino';
+import logger from './logger.js';
 import { config } from './config.js';
 import { runChecklist } from './gemini.js';
 import { bitrixService } from './bitrix.js';
-
-// Логгер
-const logger = pino({
-  level: process.env.LOG_LEVEL || 'info',
-  formatters: { level: (label) => ({ level: label }) },
-  timestamp: () => `,"time":"${new Date().toISOString()}"`
-});
 
 const token = config.telegramBotToken;
 const userStates = new Map(); // chatId -> { step, transcript }
 
 if (!token) {
   logger.warn('TELEGRAM_BOT_TOKEN не задан. Бот не запущен.');
-} else {
-  const bot = new TelegramBot(token, { polling: true });
-  logger.info('🚀 Telegram Bot запущен в режиме polling');
+  process.exit(1);
+}
 
-  // Команда /start
-  bot.onText(/\/start/, (msg) => {
-    bot.sendMessage(
-      msg.chat.id,
-      '🤖 Отправьте транскрипт встречи для анализа.\nПосле этого пришлите ID лида в Bitrix24.'
-    );
+logger.info('🚀 Инициализация Telegram Bot...');
+
+// Создаем бота с опциями для избежания конфликтов
+const bot = new TelegramBot(token, {
+  polling: {
+    interval: 300,
+    timeout: 10,
+    limit: 100,
+    autoStart: true,
+    params: {
+      timeout: 10
+    }
+  }
+});
+
+logger.info('🚀 Telegram Bot запущен в режиме polling');
+
+// Команда /start
+bot.onText(/\/start/, (msg) => {
+  const chatId = msg.chat.id;
+  logger.info({ chatId }, 'Команда /start получена');
+  
+  bot.sendMessage(
+    chatId,
+    '🤖 Добро пожаловать в Meeting Bot!\n\n' +
+    'Отправьте транскрипт встречи для анализа, а затем ID лида в Bitrix24.\n\n' +
+    '📋 Формат работы:\n' +
+    '1. Отправьте транскрипт встречи\n' +
+    '2. Отправьте ID лида из Bitrix24\n' +
+    '3. Бот проанализирует и обновит лид'
+  ).catch(err => {
+    logger.error({ chatId, error: err.message }, 'Ошибка отправки сообщения');
   });
+});
 
-  // Обработка всех сообщений
-  bot.on('message', async (msg) => {
-    const chatId = msg.chat.id;
-    const text = msg.text?.trim();
-    if (!text || text.startsWith('/')) return;
+// Команда /help
+bot.onText(/\/help/, (msg) => {
+  const chatId = msg.chat.id;
+  bot.sendMessage(
+    chatId,
+    '📖 Помощь по Meeting Bot:\n\n' +
+    '• Просто отправьте транскрипт встречи\n' +
+    '• Затем отправьте числовой ID лида из Bitrix24\n' +
+    '• Бот автоматически проанализирует и обновит лид\n\n' +
+    '⚠️ Убедитесь, что:\n' +
+    '• Транскрипт содержит достаточно информации\n' +
+    '• ID лида корректен\n' +
+    '• Бот имеет доступ к Bitrix24'
+  ).catch(err => {
+    logger.error({ chatId, error: err.message }, 'Ошибка отправки сообщения помощи');
+  });
+});
 
-    const state = userStates.get(chatId);
+// Обработка всех сообщений
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  const text = msg.text?.trim();
+  const username = msg.from?.username || msg.from?.first_name || 'unknown';
+  
+  if (!text || text.startsWith('/')) return;
 
-    // Шаг 1: принимаем транскрипт
-    if (!state) {
-      userStates.set(chatId, { step: 'awaitingLeadId', transcript: text });
-      logger.info(`Чат ${chatId}: транскрипт сохранён`);
-      await bot.sendMessage(chatId, '✅ Транскрипт принят. Теперь отправьте ID лида в Bitrix24:');
+  logger.info({ chatId, username, textLength: text.length }, 'Получено сообщение');
+
+  const state = userStates.get(chatId);
+
+  // Шаг 1: принимаем транскрипт
+  if (!state) {
+    if (text.length < 50) {
+      bot.sendMessage(chatId, '❌ Транскрипт слишком короткий. Минимум 50 символов.');
+      return;
+    }
+    
+    userStates.set(chatId, { step: 'awaitingLeadId', transcript: text });
+    logger.info({ chatId, transcriptLength: text.length }, 'Транскрипт сохранён');
+    
+    await bot.sendMessage(chatId, 
+      '✅ Транскрипт принят (' + text.length + ' символов).\n' +
+      'Теперь отправьте числовой ID лида в Bitrix24:'
+    );
+    return;
+  }
+
+  // Шаг 2: ждём ID лида
+  if (state.step === 'awaitingLeadId') {
+    if (!/^[0-9]+$/.test(text)) {
+      await bot.sendMessage(chatId, '❌ ID лида должен быть числом. Попробуйте снова:');
       return;
     }
 
-    // Шаг 2: ждём ID лида
-    if (state.step === 'awaitingLeadId') {
-      if (!/^[0-9]+$/.test(text)) {
-        await bot.sendMessage(chatId, '❌ ID лида должен быть числом. Попробуйте снова:');
-        return;
+    const leadId = text;
+    logger.info({ chatId, leadId }, 'Получен ID лида');
+
+    try {
+      await bot.sendMessage(chatId, '🔄 Анализирую транскрипт...');
+      const analysis = await runChecklist(state.transcript, logger);
+
+      // Формируем отчёт
+      const report = formatAnalysisReport(analysis);
+
+      // Обновляем лид
+      await bot.sendMessage(chatId, '📝 Обновляю лид в Bitrix24...');
+      await bitrixService.updateLead(leadId, analysis, state.transcript, 'Telegram Bot', logger);
+      logger.info({ leadId }, '✅ Лид обновлён в Bitrix');
+
+      // Создаём задачу
+      await bot.sendMessage(chatId, '📌 Создаю задачу...');
+      const taskTitle = `Анализ встречи по лиду ${leadId} (${analysis.category || '—'})`;
+      const { taskId } = await bitrixService.createTask({
+        title: taskTitle,
+        description: report,
+        leadId,
+        source: 'Telegram Bot'
+      }, logger);
+      
+      logger.info({ leadId, taskId }, '✅ Задача создана и привязана к лиду');
+
+      // Отправляем отчёт менеджеру
+      await bot.sendMessage(chatId, '📊 Отчет готов:');
+      
+      for (const part of splitMessage(report)) {
+        await bot.sendMessage(chatId, part, { parse_mode: 'Markdown' });
       }
-
-      const leadId = text;
-      logger.info(`Чат ${chatId}: получен ID лида ${leadId}`);
-
-      try {
-        await bot.sendMessage(chatId, '🔄 Анализирую транскрипт...');
-        const analysis = await runChecklist(state.transcript, logger);
-
-        // Формируем отчёт
-        const report = formatAnalysisReport(analysis);
-
-        // Обновляем лид
-        await bitrixService.updateLead(leadId, analysis, state.transcript, 'Telegram Bot', logger);
-        logger.info({ leadId }, '✅ Лид обновлён в Bitrix');
-
-        // Создаём задачу (если задан RESPONSIBLE_ID)
-        try {
-          const taskTitle = `Анализ встречи по лиду ${leadId} (${analysis.category || '—'})`;
-          const { taskId } = await bitrixService.createTask({
-            title: taskTitle,
-            description: report,
-            leadId,
-            source: 'Telegram Bot'
-          }, logger);
-          
-          if (taskId) {
-            logger.info({ leadId, taskId }, '📌 Задача создана и привязана к лиду');
-          } else {
-            logger.info({ leadId }, 'ℹ️ Задача не создана (BITRIX_RESPONSIBLE_ID не задан)');
-          }
-        } catch (taskErr) {
-          logger.warn({ leadId, error: taskErr.message }, 'Не удалось создать задачу');
-        }
-
-        // Отправляем отчёт менеджеру
-        for (const part of splitMessage(report)) {
-          await bot.sendMessage(chatId, part, { parse_mode: 'Markdown' });
-        }
-        
-        await bot.sendMessage(chatId, '✅ Готово! Лид обновлен в Bitrix24' + 
-          (config.bitrixResponsibleId ? ' и задача создана' : ''));
-        
-      } catch (err) {
-        logger.error({ err }, 'Ошибка анализа или обновления лида');
-        await bot.sendMessage(chatId, `❌ Ошибка: ${err.message}`);
-      } finally {
-        userStates.delete(chatId);
-        logger.info(`Чат ${chatId}: процесс завершён, состояние сброшено`);
+      
+      await bot.sendMessage(chatId, 
+        '✅ Готово!\n' +
+        '• Лид #' + leadId + ' обновлен в Bitrix24\n' +
+        '• Задача #' + taskId + ' создана\n' +
+        '• Ответственный: пользователь #' + config.bitrixResponsibleId
+      );
+      
+    } catch (err) {
+      logger.error({ chatId, error: err.message, stack: err.stack }, 'Ошибка анализа или обновления лида');
+      
+      let errorMessage = `❌ Ошибка: ${err.message}`;
+      if (err.message.includes('BITRIX_WEBHOOK_URL')) {
+        errorMessage += '\n\n⚠️ Проверьте настройки Bitrix24 Webhook';
+      } else if (err.message.includes('не найден') || err.message.includes('404')) {
+        errorMessage += '\n\n⚠️ Лид с таким ID не найден в Bitrix24';
       }
+      
+      await bot.sendMessage(chatId, errorMessage);
+    } finally {
+      userStates.delete(chatId);
+      logger.info({ chatId }, 'Процесс завершён, состояние сброшено');
     }
-  });
+  }
+});
 
-  bot.on('polling_error', (error) => logger.error({ error }, 'Polling error'));
-  bot.on('webhook_error', (error) => logger.error({ error }, 'Webhook error'));
-}
+// Обработка ошибок polling
+bot.on('polling_error', (error) => {
+  logger.error({ 
+    error: error.message, 
+    code: error.code,
+    response: error.response?.body 
+  }, 'Polling error');
+});
+
+bot.on('webhook_error', (error) => {
+  logger.error({ error: error.message }, 'Webhook error');
+});
+
+// Обработка остановки бота
+process.on('SIGTERM', () => {
+  logger.info('Останавливаем Telegram Bot...');
+  bot.stopPolling();
+});
+
+process.on('SIGINT', () => {
+  logger.info('Останавливаем Telegram Bot...');
+  bot.stopPolling();
+});
 
 /**
  * Форматирование отчёта для менеджера
@@ -114,26 +192,45 @@ function formatAnalysisReport(a) {
   return `
 📊 *РЕЗУЛЬТАТЫ АНАЛИЗА ВСТРЕЧИ*
 
-1. *Анализ бизнеса:* ${a.businessAnalysis || 'Компания предоставляет услуги; требуется уточнение бизнес-модели.'}
-2. *Боли и потребности:* ${a.painPoints || '—'}
-3. *Возражения:* ${a.objections || '—'}
-4. *Реакция на модель:* ${a.clientReaction || '—'}
-5. *Особый интерес к сервису:* ${a.serviceInterest || '—'}
-6. *Найденные возможности:* ${a.opportunities || '—'}
-7. *Ошибки менеджера:* ${a.managerErrors || '—'}
-8. *Путь к закрытию:* ${a.closingPath || '—'}
-9. *Тон беседы:* ${a.tone || '—'}
-10. *Контроль диалога:* ${a.dialogControl || '—'}
-11. *Рекомендации:* ${a.recommendations || a.priorityAction || '—'}
-12. *Категория клиента:* ${a.category || '—'} (вероятность ${a.probability ?? '—'}%)
+*Категория клиента:* ${a.category || '—'} (вероятность ${a.probability ?? '—'}%)
 
 *Отрасль:* ${a.industry || '—'}
+*Что продает:* ${a.whatSells || '—'}
 *Ключевые лица:* ${a.decisionMakers || '—'}
 *Сроки решения:* ${a.decisionTimeline || '—'}
 *Бюджет:* ${a.budget || '—'}
-*Приоритет:* ${a.priorityAction || '—'}
 
-🧾 *Сводка:*
+*Основные боли и потребности:*
+${a.painPoints || '—'}
+
+*Возражения клиента:*
+${a.objections || '—'}
+
+*Реакция на предложение:*
+${a.clientReaction || '—'}
+
+*Интерес к сервису:*
+${a.serviceInterest || '—'}
+
+*Найденные возможности:*
+${a.opportunities || '—'}
+
+*Ошибки менеджера:*
+${a.managerErrors || '—'}
+
+*Путь к закрытию:*
+${a.closingPath || '—'}
+
+*Тон беседы:* ${a.tone || '—'}
+*Контроль диалога:* ${a.dialogControl || '—'}
+
+*Приоритетные действия:*
+${a.priorityAction || '—'}
+
+*Кто проводил встречу:* ${a.meetingHost || '—'}
+*Плановая дата следующей встречи:* ${a.meetingPlannedAt ? new Date(a.meetingPlannedAt).toLocaleDateString('ru-RU') : '—'}
+
+🧾 *Краткая сводка:*
 ${a.summary || '—'}
 `.trim();
 }
@@ -145,15 +242,19 @@ function splitMessage(message, maxLength = 4000) {
   if (message.length <= maxLength) return [message];
   const parts = [];
   let current = '';
-  for (const line of message.split('\n')) {
+  
+  const lines = message.split('\n');
+  for (const line of lines) {
     if ((current + line + '\n').length > maxLength) {
-      parts.push(current.trim());
-      current = '';
+      if (current.trim()) parts.push(current.trim());
+      current = line + '\n';
+    } else {
+      current += line + '\n';
     }
-    current += line + '\n';
   }
+  
   if (current.trim()) parts.push(current.trim());
   return parts;
 }
 
-export default null;
+export default bot;
