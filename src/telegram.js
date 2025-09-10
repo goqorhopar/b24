@@ -33,15 +33,7 @@ if (token) {
       }
     });
     
-    logger.info('🚀 Сервер запущен на порту 3000');
-
-    // Устанавливаем webhook
-    const webhookUrl = `${config.webhookUrl}/bot${token.split(':')[0]}:${token.split(':')[1]}`;
-    bot.setWebHook(webhookUrl).then(() => {
-      logger.info(`Webhook установлен: ${webhookUrl}`);
-    }).catch(err => {
-      logger.error({ err }, 'Ошибка установки webhook');
-    });
+    logger.info('🚀 Telegram Bot запущен в режиме polling');
 
     // Команда старта
     bot.onText(/\/start/, (msg) => {
