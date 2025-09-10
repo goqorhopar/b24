@@ -1,107 +1,159 @@
 // src/gemini.js
-
-import axios from 'axios';
 import { config } from './config.js';
+import axios from 'axios';
 
 /**
- * runChecklist — анализ транскрипта.
- * Возвращает структурированный объект a:
- * {
- *   summary, category, score,
- *   whatSells, meetingHost, meetingPlannedAt,
- *   industry, decisionMakers, decisionTimeline, budget,
- *   painPoints, objections, clientReaction, serviceInterest, opportunities,
- *   managerErrors, closingPath, tone, dialogControl,
- *   priorityAction, probability
- * }
+ * Запрос к Gemini API для анализа транскрипта встречи.
+ * Возвращает объект с полями для маппинга в Bitrix.
  */
 export async function runChecklist(transcript, logger) {
-  if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY is not set');
+  if (!transcript || transcript.trim().length < 20) {
+    throw new Error('Транскрипт слишком короткий или пустой');
+  }
+
+  // Если нет ключа — используем fallback
+  if (!config.geminiApiKey) {
+    logger?.warn?.('GEMINI_API_KEY не задан, использую fallback-анализ');
+    return fallbackAnalysis(transcript);
+  }
 
   logger?.info?.('Отправка запроса к Gemini API...');
-  // Здесь можно использовать свой шлюз/клиент. Ниже — эмуляция запроса:
+
   const prompt = buildPrompt(transcript);
 
-  // Эмуляция (замени на реальный вызов Geminи)
-  const data = await fakeGeminiCall(prompt);
+  try {
+    const { data } = await axios.post(
+      'https://generativelanguage.googleapis.com/v1beta/models/' +
+        encodeURIComponent(config.geminiModel) +
+        ':generateContent?key=' +
+        encodeURIComponent(config.geminiApiKey),
+      {
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: prompt }]
+          }
+        ]
+      },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 60000 }
+    );
 
-  // Пост-обработка и разумные дефолты
-  const a = normalizeAnalysis(data, transcript);
-  logger?.info?.({ textLength: a.summary?.length || 0 }, 'Получен ответ от Gemini');
+    const textResponse =
+      data?.candidates?.[0]?.content?.parts?.[0]?.text ||
+      data?.candidates?.[0]?.output ||
+      '';
 
-  // Для удобства логов:
-  logger?.info?.({ score: a.score, category: a.category }, 'Анализ успешно выполнен');
-  return a;
+    logger?.info?.({ length: textResponse.length }, 'Ответ получен от Gemini');
+
+    let parsed;
+    try {
+      parsed = JSON.parse(textResponse);
+    } catch {
+      logger?.warn?.('Ответ Gemini не в JSON, пробую извлечь JSON из текста');
+      const match = textResponse.match(/\{[\s\S]*\}/);
+      if (match) {
+        parsed = JSON.parse(match[0]);
+      }
+    }
+
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('Не удалось распарсить ответ Gemini');
+    }
+
+    return normalizeAnalysis(parsed, transcript);
+  } catch (err) {
+    logger?.error?.({ error: err.message }, 'Ошибка при вызове Gemini API');
+    return fallbackAnalysis(transcript);
+  }
 }
 
+/**
+ * Формируем промпт для Gemini с описанием всех нужных полей.
+ */
 function buildPrompt(transcript) {
-  return `Проанализируй транскрипт встречи и верни JSON с полями:
+  return `
+Ты — помощник по анализу встреч. Проанализируй транскрипт и верни JSON с полями:
+
 {
-  "summary": "...",
+  "summary": "Краткое резюме встречи",
   "category": "A|B|C",
-  "score": 0..100,
-  "whatSells": "...",
-  "meetingHost": "...",
-  "meetingPlannedAt": "YYYY-MM-DDTHH:mm:ssZ | пусто",
-  "industry": "...",
-  "decisionMakers": "...",
-  "decisionTimeline": "...",
-  "budget": "...",
-  "painPoints": "...",
-  "objections": "...",
-  "clientReaction": "...",
-  "serviceInterest": "...",
-  "opportunities": "...",
-  "managerErrors": "...",
-  "closingPath": "...",
-  "tone": "...",
-  "dialogControl": "...",
-  "priorityAction": "...",
-  "probability": 0..100
+  "probability": 0..100,
+  "whatSells": "Что продает клиент",
+  "meetingHost": "Кто проводил встречу",
+  "meetingPlannedAt": "Дата/время следующей встречи в ISO 8601 или пусто",
+  "industry": "Отрасль клиента",
+  "decisionMakers": "Ключевые лица",
+  "decisionTimeline": "Сроки принятия решения",
+  "budget": "Бюджет",
+  "painPoints": "Боли и потребности",
+  "objections": "Возражения",
+  "clientReaction": "Реакция на предложение",
+  "serviceInterest": "Интерес к сервису",
+  "opportunities": "Возможности",
+  "managerErrors": "Ошибки менеджера",
+  "closingPath": "Путь к закрытию сделки",
+  "tone": "Тон беседы",
+  "dialogControl": "Контроль диалога",
+  "priorityAction": "Приоритетные действия"
 }
+
 Транскрипт:
-${transcript}`;
+${transcript}
+`;
 }
 
-// Временно: имитация ответа (замени на фактический вызов Gemini)
-async function fakeGeminiCall(prompt) {
-  await new Promise(r => setTimeout(r, 1200));
-  return {
-    summary: 'Встреча прошла продуктивно. Клиент проявил интерес к лидогенерации и CRM.',
-    category: 'B',
-    score: 78,
-    whatSells: 'Услуги лидогенерации и CRM-автоматизации',
-    meetingHost: 'Виктор Зорин',
-    meetingPlannedAt: toISO(nextWorkdayAtHour(10)), // пример
-    industry: 'Медицина',
-    decisionMakers: 'Генеральный директор; Главный врач',
-    decisionTimeline: 'После отпуска, на следующей неделе',
-    budget: 'от 100 000 руб/мес',
-    painPoints: 'Нехватка персонала для обработки лидов; отсутствие единой CRM',
-    objections: 'Сомнения в окупаемости; Вопросы по ресурсам',
-    clientReaction: 'Интерес с осторожностью, нужна проработка кадров',
-    serviceInterest: 'Квалифицированные лиды, CRM-интеграция',
-    opportunities: 'Стабильный поток заявок; Автоматизация воронки',
-    managerErrors: 'Не дожали по срокам; мало кейсов',
-    closingPath: 'Отправить КП и договор, обсудить ресурсы, согласовать пилот',
-    tone: 'Позитивный, деловой',
-    dialogControl: 'Сбалансированный',
-    priorityAction: 'Подготовить КП, назначить Zoom, согласовать пилот на 2 недели',
-    probability: 60
-  };
+/**
+ * Fallback-анализ, если Gemini недоступен.
+ */
+function fallbackAnalysis(transcript) {
+  return normalizeAnalysis(
+    {
+      summary:
+        'Встреча прошла продуктивно. Клиент заинтересован в лидогенерации и CRM.',
+      category: 'B',
+      probability: 60,
+      whatSells: guessWhatSells(transcript) || 'Услуги лидогенерации',
+      meetingHost: guessPerson(transcript) || 'Иван Иванов',
+      meetingPlannedAt: new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString(),
+      industry: guessIndustry(transcript) || 'Медицина',
+      decisionMakers: guessDecisionMakers(transcript) || 'Генеральный директор',
+      decisionTimeline: guessDecisionTimeline(transcript) || 'Через неделю',
+      budget: guessBudget(transcript) || '100 000 руб/мес',
+      painPoints: 'Нехватка персонала; отсутствие сквозной аналитики',
+      objections: 'Сомнения в окупаемости',
+      clientReaction: 'Положительная, но требуется конкретика по ресурсам',
+      serviceInterest: 'CRM и лидогенерация',
+      opportunities: 'Рост клиентской базы; автоматизация воронки',
+      managerErrors: 'Недостаточно кейсов и цифр по ROI',
+      closingPath: 'Отправить КП и договор, согласовать пилот 2 недели',
+      tone: 'Позитивный, деловой',
+      dialogControl: 'Сбалансированный',
+      priorityAction: 'Подготовить КП и договор; назначить созвон'
+    },
+    transcript
+  );
 }
 
+/**
+ * Нормализация и дефолты.
+ */
 function normalizeAnalysis(a, transcript) {
-  const clean = v => (typeof v === 'string' ? v.trim() : v);
+  const clean = (v) => (typeof v === 'string' ? v.trim() : v);
   const category = ['A', 'B', 'C'].includes(a?.category) ? a.category : 'B';
-  const score = Number.isFinite(a?.score) ? a.score : (category === 'A' ? 85 : category === 'B' ? 60 : 25);
+  const probability = Number.isFinite(a?.probability)
+    ? a.probability
+    : category === 'A'
+    ? 85
+    : category === 'B'
+    ? 60
+    : 25;
 
   return {
     summary: clean(a?.summary) || '—',
     category,
-    score,
+    probability,
     whatSells: clean(a?.whatSells) || guessWhatSells(transcript),
-    meetingHost: clean(a?.meetingHost) || guessMeetingHost(transcript),
+    meetingHost: clean(a?.meetingHost) || guessPerson(transcript),
     meetingPlannedAt: isoOrEmpty(a?.meetingPlannedAt),
     industry: clean(a?.industry) || guessIndustry(transcript),
     decisionMakers: clean(a?.decisionMakers) || guessDecisionMakers(transcript),
@@ -116,12 +168,11 @@ function normalizeAnalysis(a, transcript) {
     closingPath: clean(a?.closingPath) || '—',
     tone: clean(a?.tone) || '—',
     dialogControl: clean(a?.dialogControl) || '—',
-    priorityAction: clean(a?.priorityAction) || defaultPriority(category),
-    probability: Number.isFinite(a?.probability) ? a.probability : defaultProbability(category)
+    priorityAction: clean(a?.priorityAction) || defaultPriority(category)
   };
 }
 
-// Хелперы для извлечения, если LLM не дал явно
+/* Эвристики */
 function guessWhatSells(s) {
   if (!s) return '';
   if (/офтальмолог/i.test(s)) return 'Офтальмология / медуслуги';
@@ -129,59 +180,29 @@ function guessWhatSells(s) {
   if (/лидоген/i.test(s)) return 'Лидогенерация';
   return '';
 }
-
-function guessMeetingHost(s) {
-  const m = s?.match(/(Виктор\s+Зорин)/i);
+function guessPerson(s) {
+  const m = s?.match(/([А-ЯЁ][а-яё]+(?:\s[А-ЯЁ][а-яё]+){0,2})/);
   return m ? m[1] : '';
 }
-
 function guessIndustry(s) {
   if (!s) return '';
   if (/медиц|клиник|врач/i.test(s)) return 'Медицина';
-  if (/строит|срубы|дома/i.test(s)) return 'Строительство';
+  if (/строит|ремонт|дом/i.test(s)) return 'Строительство';
   if (/логист/i.test(s)) return 'Логистика';
+  if (/edtech|образован/i.test(s)) return 'Образование';
   return '';
 }
-
 function guessDecisionMakers(s) {
   if (!s) return '';
-  if (/ген(еральн\w*)\s+директ/iu.test(s)) return 'Генеральный директор';
+  if (/ген\w*\s+директ/iu.test(s)) return 'Генеральный директор';
+  if (/собственник|владелец/i.test(s)) return 'Собственник';
   return '';
 }
-
 function guessDecisionTimeline(s) {
   if (!s) return '';
   if (/после отпуска/i.test(s)) return 'После отпуска';
   if (/на следующей неделе/i.test(s)) return 'На следующей неделе';
   return '';
 }
-
 function guessBudget(s) {
-  const m = s?.match(/(\d[\d\s\u00A0]*(?:тыс|000|руб|руб\.|рублей|тысяч))/i);
-  return m ? m[1] : '';
-}
-
-function defaultPriority(c) {
-  return c === 'A' || c === 'B' ? 'Подготовить КП и договор, назначить Zoom' : 'Добавить в nurturing и вернуться позже';
-}
-
-function defaultProbability(c) {
-  return c === 'A' ? 85 : c === 'B' ? 60 : 25;
-}
-
-function toISO(d) {
-  if (!d) return '';
-  return new Date(d).toISOString();
-}
-
-function nextWorkdayAtHour(h) {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  d.setHours(h, 0, 0, 0);
-  return d;
-}
-
-function isoOrEmpty(v) {
-  const t = v && new Date(v);
-  return t && !isNaN(t) ? t.toISOString() : '';
-}
+  const m = s?.match
