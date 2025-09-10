@@ -1,52 +1,35 @@
+// src/config.js
+
 export const config = {
-  port: process.env.PORT || 3000,
-  chromiumPath: process.env.CHROME_BIN || '/usr/bin/google-chrome-stable',
-  geminiApiKey: process.env.GEMINI_API_KEY,
-  recording: {
-    outDir: process.env.REC_DIR || '/tmp/recordings',
-    maxSeconds: Number(process.env.REC_MAX_SECONDS || 3600)
-  },
+  // Telegram
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
-  adminChatId: process.env.ADMIN_CHAT_ID,
-  webhookUrl: process.env.RENDER_EXTERNAL_URL || 'https://b24.onrender.com',
-  
-  // Настройки Битрикс24 (из логов)
-  bitrix: {
-    // Базовый URL Битрикс24
-    baseUrl: 'https://skill-to-lead.bitrix24.ru',
-    
-    // ID пользователя для webhook
-    userId: '1403',
-    
-    // Ключ webhook
-    webhookKey: 'cmf3ncejqif8ny31',
-    
-    // ID ответственного за лиды
-    responsibleId: process.env.BITRIX_RESPONSIBLE_ID || '1',
-    
-    // Дополнительные настройки
-    timeout: 30000, // 30 секунд таймаут
-    retryAttempts: 3, // Количество попыток
-    
-    // Маппинг статусов
-    statusMapping: {
-      'NEW': 'NEW',
-      'IN_PROCESS': 'IN_PROCESS', 
-      'PROCESSED': 'PROCESSED',
-      'JUNK': 'JUNK'
-    },
-    
-    // Стандартные поля для безопасного обновления
-    safeFields: [
-      'TITLE',
-      'NAME', 
-      'LAST_NAME',
-      'COMMENTS',
-      'STATUS_ID',
-      'SOURCE_DESCRIPTION',
-      'CURRENCY_ID',
-      'OPENED',
-      'ASSIGNED_BY_ID'
-    ]
+
+  // Bitrix
+  bitrixWebhookUrl: process.env.BITRIX_WEBHOOK_URL, // например: https://<domain>.bitrix24.ru/rest/<user>/<token>
+  bitrixResponsibleId: process.env.BITRIX_RESPONSIBLE_ID, // ID ответственного за задачи
+  bitrixCreatedById: process.env.BITRIX_CREATED_BY_ID || process.env.BITRIX_RESPONSIBLE_ID,
+  bitrixTaskDefaultDeadlineDays: process.env.BITRIX_TASK_DEADLINE_DAYS || 3,
+
+  // Gemini / LLM
+  geminiApiKey: process.env.GEMINI_API_KEY,
+  geminiModel: process.env.GEMINI_MODEL || 'gemini-1.5-pro',
+
+  // Маппинг пользовательских полей лида (замени пустые строки на реальные UF_* коды)
+  // Названия взяты с интерфейса карточки лида, который ты показал: «Что продает», «Кто проводит встречу?», «План дата встречи» и т.д.
+  leadFieldMap: {
+    // Примеры. Обнови значениями реальных UF_* кодов из CRM → Настройки → Настраиваемые поля
+    UF_WHAT_SELLS: '',             // "Что продает"
+    UF_MEETING_HOST: '',           // "Кто проводит встречу?"
+    UF_MEETING_PLANNED_AT: '',     // "План дата встречи" (тип Дата/Время)
+    UF_INDUSTRY: '',               // "Отрасль" (строка/список)
+    UF_DECISION_MAKERS: '',        // "Ключевые лица" (строка/текст)
+    UF_DECISION_TIMELINE: '',      // "Сроки принятия решения" (строка/текст)
+    UF_BUDGET: '',                 // "Бюджет" (строка/число)
+    UF_CATEGORY: '',               // "Категория клиента" (строка/список: A/B/C)
+    UF_PRIORITY_ACTION: '',        // "Приоритетные действия" (строка/текст)
+    UF_PROBABILITY: '',            // "Вероятность сделки" (число)
+    UF_TONE: '',                   // "Тон беседы" (строка)
+    UF_DIALOG_CONTROL: '',         // "Контроль диалога" (строка)
+    UF_OBJECTIONS: ''              // "Возражения" (текст)
   }
 };
