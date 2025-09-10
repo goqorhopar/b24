@@ -4,9 +4,18 @@ import { config } from './config.js';
 
 const FM = config.leadFieldMap || {};
 const BITRIX_WEBHOOK = (config.bitrixWebhookUrl || '').replace(/\/$/, '');
-const RESPONSIBLE_ID = config.bitrixResponsibleId ? Number(config.bitrixResponsibleId) : null;
-const CREATED_BY_ID = config.bitrixCreatedById ? Number(config.bitrixCreatedById) : RESPONSIBLE_ID;
-const TASK_DEADLINE_DAYS = Number(config.bitrixTaskDefaultDeadlineDays) || 3;
+const RESPONSIBLE_ID = config.bitrixResponsibleId;
+const CREATED_BY_ID = config.bitrixCreatedById || RESPONSIBLE_ID;
+const TASK_DEADLINE_DAYS = config.bitrixTaskDefaultDeadlineDays;
+
+// Валидация конфигурации
+if (!BITRIX_WEBHOOK) {
+  throw new Error('BITRIX_WEBHOOK_URL не настроен');
+}
+
+if (!RESPONSIBLE_ID) {
+  console.warn('⚠️ BITRIX_RESPONSIBLE_ID не задан. Задачи не будут создаваться.');
+}
 
 /* ===========================
    Вспомогательные функции
@@ -24,24 +33,32 @@ function parseNumber(val) {
 }
 
 async function callBitrix(method, payload, logger) {
-  if (!BITRIX_WEBHOOK) {
-    throw new Error('BITRIX_WEBHOOK_URL не настроен');
-  }
-  
   const url = `${BITRIX_WEBHOOK}/${method}.json`;
+  
   try {
+    logger?.debug?.({ method, payload }, 'Bitrix API call');
     const { data } = await axios.post(url, payload, {
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 30000
     });
+    
     if (data?.error) {
       const err = new Error(`${data.error}: ${data.error_description}`);
       err.details = data;
       throw err;
     }
+    
     return data?.result;
   } catch (e) {
-    logger?.error?.({ method, message: e.message, payload }, 'Bitrix API call failed');
-    throw e;
+    const errorMsg = e.response?.data?.error_description || e.message;
+    logger?.error?.({ 
+      method, 
+      message: errorMsg,
+      url,
+      payload: JSON.stringify(payload).substring(0, 500)
+    }, 'Bitrix API call failed');
+    
+    throw new Error(`Bitrix API ошибка: ${errorMsg}`);
   }
 }
 
@@ -56,18 +73,25 @@ function buildLeadFields(a, transcript, sourceLabel, logger) {
   const fields = {
     COMMENTS: sanitizeText(
       [
-        'Анализ встречи:',
+        '🤖 Анализ встречи (автоматический):',
+        '────────────────────────',
         a.summary || '—',
         '',
-        `Категория: ${a.category || '—'} (вероятность ${a.probability ?? '—'}%)`,
+        `📊 Категория: ${a.category || '—'} (вероятность ${a.probability ?? '—'}%)`,
+        `🏢 Отрасль: ${a.industry || '—'}`,
+        `👥 Ключевые лица: ${a.decisionMakers || '—'}`,
+        `⏰ Сроки решения: ${a.decisionTimeline || '—'}`,
+        `💰 Бюджет: ${a.budget || '—'}`,
         '',
-        `Источник обновления: ${sourceLabel || 'Telegram Bot'}`
+        `🔧 Источник: ${sourceLabel || 'Telegram Bot'}`,
+        `🕒 Время анализа: ${new Date().toLocaleString('ru-RU')}`
       ].join('\n'),
       20000
     ),
     SOURCE_DESCRIPTION: sanitizeText(sourceLabel || 'Updated via Meeting Bot', 255)
   };
 
+  // Динамическое заполнение пользовательских полей
   if (FM.UF_WHAT_SELLS && a.whatSells) fields[FM.UF_WHAT_SELLS] = sanitizeText(a.whatSells, 500);
   if (FM.UF_MEETING_HOST && a.meetingHost) fields[FM.UF_MEETING_HOST] = sanitizeText(a.meetingHost, 255);
   if (FM.UF_MEETING_PLANNED_AT && a.meetingPlannedAt) fields[FM.UF_MEETING_PLANNED_AT] = a.meetingPlannedAt;
@@ -95,44 +119,56 @@ function buildLeadFields(a, transcript, sourceLabel, logger) {
 function buildActivityBody(a, transcript) {
   const lines = [];
   const add = s => lines.push(s);
-  add('РЕЗУЛЬТАТЫ АНАЛИЗА ВСТРЕЧИ');
+  
+  add('🤖 АВТОМАТИЧЕСКИЙ АНАЛИЗ ВСТРЕЧИ');
+  add('────────────────────────');
   add('');
-  add(`1) Анализ бизнеса: ${a.businessAnalysis || 'Компания предоставляет услуги; требуется уточнение бизнес-модели.'}`);
-  add(`2) Боли и потребности: ${a.painPoints || '—'}`);
-  add(`3) Возражения: ${a.objections || '—'}`);
-  add(`4) Реакция на модель: ${a.clientReaction || '—'}`);
-  add(`5) Интерес к сервису: ${a.serviceInterest || '—'}`);
-  add(`6) Возможности: ${a.opportunities || '—'}`);
-  add(`7) Ошибки менеджера: ${a.managerErrors || '—'}`);
-  add(`8) Путь к закрытию: ${a.closingPath || '—'}`);
-  add(`9) Тон беседы: ${a.tone || '—'}`);
-  add(`10) Контроль диалога: ${a.dialogControl || '—'}`);
-  add(`11) Рекомендации: ${a.recommendations || a.priorityAction || '—'}`);
-  add(`12) Категория клиента: ${a.category || '—'} (вероятность ${a.probability ?? '—'}%)`);
+  add(`📊 Категория клиента: ${a.category || '—'} (вероятность ${a.probability ?? '—'}%)`);
+  add(`🏢 Отрасль: ${a.industry || '—'}`);
+  add(`👥 Ключевые лица: ${a.decisionMakers || '—'}`);
+  add(`⏰ Сроки решения: ${a.decisionTimeline || '—'}`);
+  add(`💰 Бюджет: ${a.budget || '—'}`);
   add('');
-  add(`Отрасль: ${a.industry || '—'}`);
-  add(`Ключевые лица: ${a.decisionMakers || '—'}`);
-  add(`Сроки решения: ${a.decisionTimeline || '—'}`);
-  add(`Бюджет: ${a.budget || '—'}`);
-  add(`Приоритет: ${a.priorityAction || '—'}`);
+  add('🎯 Основные боли и потребности:');
+  add(a.painPoints || '—');
   add('');
-  add('Сводка:');
-  add(sanitizeText(a.summary || '—', 15000));
+  add('❗ Возражения:');
+  add(a.objections || '—');
   add('');
-  add('Оригинальный транскрипт (фрагмент):');
+  add('😊 Реакция на предложение:');
+  add(a.clientReaction || '—');
+  add('');
+  add('⭐ Интерес к сервису:');
+  add(a.serviceInterest || '—');
+  add('');
+  add('🚀 Возможности:');
+  add(a.opportunities || '—');
+  add('');
+  add('📝 Приоритетные действия:');
+  add(a.priorityAction || '—');
+  add('');
+  add('🧾 Краткая сводка:');
+  add(a.summary || '—');
+  add('');
+  add('────────────────────────');
+  add('📄 ОРИГИНАЛЬНЫЙ ТРАНСКРИПТ (ФРАГМЕНТ):');
   add(sanitizeText(transcript || '—', 8000));
+  
   return sanitizeText(lines.join('\n'), 60000);
 }
 
 async function addActivityToLead(leadId, subject, description, logger) {
   const fields = {
     OWNER_ID: Number(leadId),
-    OWNER_TYPE_ID: 1,
-    TYPE_ID: 4, // 4 = Задача (проверьте соответствие в вашем Bitrix24)
+    OWNER_TYPE_ID: 1, // 1 = Сделка/Лид
+    TYPE_ID: 2, // 2 = Звонок
     SUBJECT: sanitizeText(subject, 255),
     DESCRIPTION: sanitizeText(description, 60000),
-    DESCRIPTION_TYPE: 1
+    DESCRIPTION_TYPE: 1, // 1 = HTML, 2 = Plain text
+    COMPLETED: 'Y',
+    PRIORITY: 2 // 1 - низкая, 2 - средняя, 3 - высокая
   };
+  
   return callBitrix('crm.activity.add', { fields }, logger);
 }
 
@@ -142,17 +178,21 @@ async function addActivityToLead(leadId, subject, description, logger) {
 export async function updateLead(leadId, analysis, transcript, source, logger) {
   if (!leadId) throw new Error('leadId обязателен');
   
+  logger?.info?.({ leadId }, 'Начинаю обновление лида');
+  
   const fields = buildLeadFields(analysis, transcript, source, logger);
-  await callBitrix('crm.lead.update', { id: String(leadId), fields }, logger);
-
+  const result = await callBitrix('crm.lead.update', { id: String(leadId), fields }, logger);
+  
   try {
-    const title = `Анализ встречи (категория: ${analysis?.category || '—'})`;
+    const title = `Анализ встречи (${analysis?.category || 'не определена'})`;
     const body = buildActivityBody(analysis, transcript);
     await addActivityToLead(leadId, title, body, logger);
     logger?.info?.({ leadId }, 'Активность добавлена к лиду');
   } catch (e) {
     logger?.warn?.({ leadId, error: e.message }, 'Не удалось добавить активность к лиду');
   }
+  
+  return result;
 }
 
 export async function createTask(
@@ -168,22 +208,59 @@ export async function createTask(
   let d = deadline ? new Date(deadline) : new Date();
   if (!deadline) {
     d.setDate(d.getDate() + TASK_DEADLINE_DAYS);
-    d.setUTCHours(16, 0, 0, 0); // 19:00 по Москве (UTC+3)
+    d.setHours(19, 0, 0, 0); // 19:00 по местному времени
   }
 
   const fields = {
     TITLE: sanitizeText(title || `Анализ встречи по лиду ${leadId}`, 255),
-    DESCRIPTION: sanitizeText(`${description || ''}\n\nИсточник: ${source}`, 59000),
+    DESCRIPTION: sanitizeText(`${description || ''}\n\n📎 Источник: ${source}`, 59000),
     RESPONSIBLE_ID: Number(responsibleId),
     CREATED_BY: Number(createdById || responsibleId),
     UF_CRM_TASK: [`L_${leadId}`],
-    DEADLINE: d.toISOString().replace('Z', '') // Формат для Bitrix
+    DEADLINE: d.toISOString().replace('Z', ''),
+    PRIORITY: 2, // 1 - низкая, 2 - средняя, 3 - высокая
+    GROUP_ID: 0 // Основная группа задач
   };
 
   const result = await callBitrix('tasks.task.add', { fields }, logger);
   const taskId = result?.task?.id || result?.taskId || result;
-  logger?.info?.({ leadId, taskId }, 'Задача создана');
+  
+  if (taskId) {
+    logger?.info?.({ leadId, taskId }, 'Задача создана и привязана к лиду');
+    
+    // Добавляем комментарий к задаче
+    try {
+      await callBitrix('task.commentitem.add', {
+        TASKID: taskId,
+        FIELDS: {
+          POST_MESSAGE: `✅ Задача создана автоматически на основе анализа встречи по лиду ${leadId}`
+        }
+      }, logger);
+    } catch (commentError) {
+      logger?.warn?.({ taskId, error: commentError.message }, 'Не удалось добавить комментарий к задаче');
+    }
+  }
+  
   return { taskId };
 }
 
-export const bitrixService = { updateLead, createTask };
+// Дополнительные методы для работы с Bitrix
+export async function getLead(leadId, logger) {
+  if (!leadId) throw new Error('leadId обязателен');
+  return callBitrix('crm.lead.get', { id: String(leadId) }, logger);
+}
+
+export async function searchLeads(query, logger) {
+  if (!query) throw new Error('Поисковый запрос обязателен');
+  return callBitrix('crm.lead.list', {
+    filter: { '%TITLE': `%${query}%` },
+    select: ['ID', 'TITLE', 'NAME', 'LAST_NAME', 'STATUS_ID']
+  }, logger);
+}
+
+export const bitrixService = { 
+  updateLead, 
+  createTask, 
+  getLead, 
+  searchLeads 
+};
