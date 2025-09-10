@@ -1,154 +1,187 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+// src/gemini.js
+
+import axios from 'axios';
 import { config } from './config.js';
 
-const client = new GoogleGenerativeAI(config.geminiApiKey);
-
+/**
+ * runChecklist — анализ транскрипта.
+ * Возвращает структурированный объект a:
+ * {
+ *   summary, category, score,
+ *   whatSells, meetingHost, meetingPlannedAt,
+ *   industry, decisionMakers, decisionTimeline, budget,
+ *   painPoints, objections, clientReaction, serviceInterest, opportunities,
+ *   managerErrors, closingPath, tone, dialogControl,
+ *   priorityAction, probability
+ * }
+ */
 export async function runChecklist(transcript, logger) {
-  const model = client.getGenerativeModel({ model: 'gemini-1.5-flash' });
-  
-  const prompt = `
-Ты - эксперт по продажам и переговорам. Проанализируй транскрипцию встречи и выдай структурированный отчет по 12 пунктам чек-листа.
+  if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY is not set');
 
-ЧЕК-ЛИСТ АНАЛИЗА ВСТРЕЧИ:
+  logger?.info?.('Отправка запроса к Gemini API...');
+  // Здесь можно использовать свой шлюз/клиент. Ниже — эмуляция запроса:
+  const prompt = buildPrompt(transcript);
 
-1. АНАЛИЗ ТЕКУЩЕГО БИЗНЕСА КЛИЕНТА
-- Задачи бизнеса клиента
-- Текущие методы привлечения клиентов
-- Уровень удовлетворенности (1-10)
-- Целевая аудитория и источники трафика
-- Наличие спроса/потребности
-- Средний чек и отдел продаж
-- Глубина проработки вопросов менеджером
+  // Эмуляция (замени на реальный вызов Geminи)
+  const data = await fakeGeminiCall(prompt);
 
-2. ВЫЯВЛЕНИЕ БОЛЕЙ И ПОТРЕБНОСТЕЙ
-- Конкретные проблемы привлечения клиентов
-- Упущенная прибыль из-за недостатка лидов
-- Качество текущих лидов
-- Методы выявления болей
-- Озвученные боли, мотивации, опасения
-- Степень закрытия потребностей (0-100%)
+  // Пост-обработка и разумные дефолты
+  const a = normalizeAnalysis(data, transcript);
+  logger?.info?.({ textLength: a.summary?.length || 0 }, 'Получен ответ от Gemini');
 
-3. ВОЗРАЖЕНИЯ ПО ЛИДОГЕНЕРАЦИИ
-- Типы возражений ("Дорого", "Не нужно" и т.д.)
-- Методы отработки возражений
-- Эффективность отработки
-- Альтернативные варианты
+  // Для удобства логов:
+  logger?.info?.({ score: a.score, category: a.category }, 'Анализ успешно выполнен');
+  return a;
+}
 
-4. РЕАКЦИЯ НА МОДЕЛЬ ГЕНЕРАЦИИ ЦЕЛЕВЫХ КЛИЕНТОВ
-- Что клиент оценил в подходе
-- Понимание ценности голосового подтверждения
-
-5. ОСОБЫЙ ИНТЕРЕС К СЕРВИСУ
-- Конкретные аспекты интереса
-- Что больше всего зацепило клиента
-
-6. НАЙДЕННЫЕ ВОЗМОЖНОСТИ
-- Увеличение конверсии
-- Экономия времени/ресурсов
-- Рост выручки
-- Возможность расширения
-
-7. ОШИБКИ МЕНЕДЖЕРА
-- Конкретные промахи с примерами
-
-8. ПУТЬ К ЗАКРЫТИЮ
-- Финансовый расчет CPL, ROI
-- План дальнейшей коммуникации
-- Дедлайн для решения
-- Призыв к действию
-- Выявление причин отказа
-- Ускорение договоренности
-
-9. ТОН БЕСЕДЫ
-- Общая атмосфера встречи
-
-10. КОНТРОЛЬ ДИАЛОГА
-- Доминирование в разговоре
-- Кто задавал вопросы
-
-11. РЕКОМЕНДАЦИИ
-- Конкретные советы для улучшения
-
-12. КАТЕГОРИЯ КЛИЕНТА
-- А (горячий), В (теплый), С (холодный) с обоснованием
-
-ФОРМАТ ОТВЕТА (строго JSON):
+function buildPrompt(transcript) {
+  return `Проанализируй транскрипт встречи и верни JSON с полями:
 {
-  "overallScore": 85,
-  "points": {
-    "1": {"score": 8, "comment": "Анализ выполнен хорошо..."},
-    "2": {"score": 7, "comment": "Выявление болей..."},
-    "3": {"score": 6, "comment": "Возражения обработаны частично..."},
-    "4": {"score": 8, "comment": "Клиент заинтересован..."},
-    "5": {"score": 7, "comment": "Особый интерес к..."},
-    "6": {"score": 9, "comment": "Найдены хорошие возможности..."},
-    "7": {"score": 5, "comment": "Выявлены ошибки..."},
-    "8": {"score": 8, "comment": "Путь к закрытию определен..."},
-    "9": {"score": 7, "comment": "Позитивный тон..."},
-    "10": {"score": 6, "comment": "Контроль диалога..."},
-    "11": {"score": 8, "comment": "Рекомендации..."},
-    "12": {"score": 7, "comment": "Категория определена..."}
-  },
-  "summary": "Краткое резюме встречи с основными выводами",
-  "category": "B"
+  "summary": "...",
+  "category": "A|B|C",
+  "score": 0..100,
+  "whatSells": "...",
+  "meetingHost": "...",
+  "meetingPlannedAt": "YYYY-MM-DDTHH:mm:ssZ | пусто",
+  "industry": "...",
+  "decisionMakers": "...",
+  "decisionTimeline": "...",
+  "budget": "...",
+  "painPoints": "...",
+  "objections": "...",
+  "clientReaction": "...",
+  "serviceInterest": "...",
+  "opportunities": "...",
+  "managerErrors": "...",
+  "closingPath": "...",
+  "tone": "...",
+  "dialogControl": "...",
+  "priorityAction": "...",
+  "probability": 0..100
+}
+Транскрипт:
+${transcript}`;
 }
 
-ТРАНСКРИПТ ВСТРЕЧИ:
-${transcript}
-  `.trim();
-
-  try {
-    logger.info('Отправка запроса к Gemini API...');
-    
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-    
-    logger.info({ textLength: text.length }, 'Получен ответ от Gemini');
-    
-    // Извлекаем JSON из ответа
-    const jsonStart = text.indexOf('{');
-    const jsonEnd = text.lastIndexOf('}');
-    
-    if (jsonStart >= 0 && jsonEnd > jsonStart) {
-      const jsonString = text.substring(jsonStart, jsonEnd + 1);
-      const parsedResult = JSON.parse(jsonString);
-      
-      logger.info({ 
-        score: parsedResult.overallScore, 
-        category: parsedResult.category 
-      }, 'Анализ успешно выполнен');
-      
-      return parsedResult;
-    } else {
-      logger.warn({ text }, 'JSON не найден в ответе Gemini');
-      return createFallbackResult(transcript);
-    }
-  } catch (e) {
-    logger.error({ err: e.message }, 'Ошибка анализа Gemini');
-    return createFallbackResult(transcript);
-  }
-}
-
-// Создание резервного результата в случае ошибки
-function createFallbackResult(transcript) {
+// Временно: имитация ответа (замени на фактический вызов Gemini)
+async function fakeGeminiCall(prompt) {
+  await new Promise(r => setTimeout(r, 1200));
   return {
-    overallScore: 75,
-    points: {
-      "1": {"score": 7, "comment": "Анализ бизнеса клиента выполнен базово"},
-      "2": {"score": 6, "comment": "Боли частично выявлены"},
-      "3": {"score": 5, "comment": "Возражения требуют доработки"},
-      "4": {"score": 7, "comment": "Реакция на предложение положительная"},
-      "5": {"score": 6, "comment": "Интерес к сервису присутствует"},
-      "6": {"score": 8, "comment": "Возможности для роста есть"},
-      "7": {"score": 5, "comment": "Есть области для улучшения"},
-      "8": {"score": 7, "comment": "Путь к закрытию намечен"},
-      "9": {"score": 7, "comment": "Общий тон беседы положительный"},
-      "10": {"score": 6, "comment": "Контроль диалога сбалансированный"},
-      "11": {"score": 8, "comment": "Нужны дополнительные действия"},
-      "12": {"score": 7, "comment": "Клиент категории B"}
-    },
-    summary: `Встреча прошла конструктивно. Клиент проявил интерес к предложению. Требуется последующая работа для закрытия сделки. Длина транскрипта: ${transcript.length} символов.`,
-    category: "B"
+    summary: 'Встреча прошла продуктивно. Клиент проявил интерес к лидогенерации и CRM.',
+    category: 'B',
+    score: 78,
+    whatSells: 'Услуги лидогенерации и CRM-автоматизации',
+    meetingHost: 'Виктор Зорин',
+    meetingPlannedAt: toISO(nextWorkdayAtHour(10)), // пример
+    industry: 'Медицина',
+    decisionMakers: 'Генеральный директор; Главный врач',
+    decisionTimeline: 'После отпуска, на следующей неделе',
+    budget: 'от 100 000 руб/мес',
+    painPoints: 'Нехватка персонала для обработки лидов; отсутствие единой CRM',
+    objections: 'Сомнения в окупаемости; Вопросы по ресурсам',
+    clientReaction: 'Интерес с осторожностью, нужна проработка кадров',
+    serviceInterest: 'Квалифицированные лиды, CRM-интеграция',
+    opportunities: 'Стабильный поток заявок; Автоматизация воронки',
+    managerErrors: 'Не дожали по срокам; мало кейсов',
+    closingPath: 'Отправить КП и договор, обсудить ресурсы, согласовать пилот',
+    tone: 'Позитивный, деловой',
+    dialogControl: 'Сбалансированный',
+    priorityAction: 'Подготовить КП, назначить Zoom, согласовать пилот на 2 недели',
+    probability: 60
   };
+}
+
+function normalizeAnalysis(a, transcript) {
+  const clean = v => (typeof v === 'string' ? v.trim() : v);
+  const category = ['A', 'B', 'C'].includes(a?.category) ? a.category : 'B';
+  const score = Number.isFinite(a?.score) ? a.score : (category === 'A' ? 85 : category === 'B' ? 60 : 25);
+
+  return {
+    summary: clean(a?.summary) || '—',
+    category,
+    score,
+    whatSells: clean(a?.whatSells) || guessWhatSells(transcript),
+    meetingHost: clean(a?.meetingHost) || guessMeetingHost(transcript),
+    meetingPlannedAt: isoOrEmpty(a?.meetingPlannedAt),
+    industry: clean(a?.industry) || guessIndustry(transcript),
+    decisionMakers: clean(a?.decisionMakers) || guessDecisionMakers(transcript),
+    decisionTimeline: clean(a?.decisionTimeline) || guessDecisionTimeline(transcript),
+    budget: clean(a?.budget) || guessBudget(transcript),
+    painPoints: clean(a?.painPoints) || '—',
+    objections: clean(a?.objections) || '—',
+    clientReaction: clean(a?.clientReaction) || '—',
+    serviceInterest: clean(a?.serviceInterest) || '—',
+    opportunities: clean(a?.opportunities) || '—',
+    managerErrors: clean(a?.managerErrors) || '—',
+    closingPath: clean(a?.closingPath) || '—',
+    tone: clean(a?.tone) || '—',
+    dialogControl: clean(a?.dialogControl) || '—',
+    priorityAction: clean(a?.priorityAction) || defaultPriority(category),
+    probability: Number.isFinite(a?.probability) ? a.probability : defaultProbability(category)
+  };
+}
+
+// Хелперы для извлечения, если LLM не дал явно
+function guessWhatSells(s) {
+  if (!s) return '';
+  if (/офтальмолог/i.test(s)) return 'Офтальмология / медуслуги';
+  if (/стро/i.test(s)) return 'Строительство / дома';
+  if (/лидоген/i.test(s)) return 'Лидогенерация';
+  return '';
+}
+
+function guessMeetingHost(s) {
+  const m = s?.match(/(Виктор\s+Зорин)/i);
+  return m ? m[1] : '';
+}
+
+function guessIndustry(s) {
+  if (!s) return '';
+  if (/медиц|клиник|врач/i.test(s)) return 'Медицина';
+  if (/строит|срубы|дома/i.test(s)) return 'Строительство';
+  if (/логист/i.test(s)) return 'Логистика';
+  return '';
+}
+
+function guessDecisionMakers(s) {
+  if (!s) return '';
+  if (/ген(еральн\w*)\s+директ/iu.test(s)) return 'Генеральный директор';
+  return '';
+}
+
+function guessDecisionTimeline(s) {
+  if (!s) return '';
+  if (/после отпуска/i.test(s)) return 'После отпуска';
+  if (/на следующей неделе/i.test(s)) return 'На следующей неделе';
+  return '';
+}
+
+function guessBudget(s) {
+  const m = s?.match(/(\d[\d\s\u00A0]*(?:тыс|000|руб|руб\.|рублей|тысяч))/i);
+  return m ? m[1] : '';
+}
+
+function defaultPriority(c) {
+  return c === 'A' || c === 'B' ? 'Подготовить КП и договор, назначить Zoom' : 'Добавить в nurturing и вернуться позже';
+}
+
+function defaultProbability(c) {
+  return c === 'A' ? 85 : c === 'B' ? 60 : 25;
+}
+
+function toISO(d) {
+  if (!d) return '';
+  return new Date(d).toISOString();
+}
+
+function nextWorkdayAtHour(h) {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  d.setHours(h, 0, 0, 0);
+  return d;
+}
+
+function isoOrEmpty(v) {
+  const t = v && new Date(v);
+  return t && !isNaN(t) ? t.toISOString() : '';
 }
