@@ -154,3 +154,5 @@ export async function createTask({ title, description, leadId, source = 'Meeting
   const d = deadline ? new Date(deadline) : new Date();
   if (!deadline) {
     d.setDate(d.getDate() + TASK_DEADLINE_DAYS
+    d.setHours(19, 0, 0, 0);
+}
