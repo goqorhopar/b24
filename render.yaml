@@ -6,7 +6,7 @@ services:
     buildCommand: npm install
     startCommand: npm start
     envVars:
-      - key: TELEGRAM_TOKEN
+      - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: GEMINI_API_KEY
         sync: false
@@ -21,3 +21,13 @@ services:
           type: web
           name: meeting-bot
           property: url
+      # Опциональные переменные
+      - key: BITRIX_RESPONSIBLE_ID
+        sync: false
+        optional: true
+      - key: BITRIX_CREATED_BY_ID
+        sync: false
+        optional: true
+      - key: BITRIX_TASK_DEADLINE_DAYS
+        value: 3
+        optional: true
