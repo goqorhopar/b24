@@ -14,5 +14,3 @@ COPY src ./src
 # Переменные окружения (все подтягиваются из Render или docker-compose)
 ENV NODE_ENV=production
 
-# Запуск бота
-CMD ["node", "src/index.js"]
