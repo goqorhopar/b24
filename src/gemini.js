@@ -172,6 +172,25 @@ function normalizeAnalysis(a, transcript) {
   };
 }
 
+function isoOrEmpty(dateStr) {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr);
+    return isNaN(d.getTime()) ? '' : d.toISOString();
+  } catch {
+    return '';
+  }
+}
+
+function defaultPriority(category) {
+  switch (category) {
+    case 'A': return 'Срочно подготовить КП и договор';
+    case 'B': return 'Подготовить КП, назначить созвон';
+    case 'C': return 'Добавить в рассылку, напомнить через неделю';
+    default: return 'Обработать лид';
+  }
+}
+
 /* Эвристики */
 function guessWhatSells(s) {
   if (!s) return '';
@@ -180,10 +199,12 @@ function guessWhatSells(s) {
   if (/лидоген/i.test(s)) return 'Лидогенерация';
   return '';
 }
+
 function guessPerson(s) {
   const m = s?.match(/([А-ЯЁ][а-яё]+(?:\s[А-ЯЁ][а-яё]+){0,2})/);
   return m ? m[1] : '';
 }
+
 function guessIndustry(s) {
   if (!s) return '';
   if (/медиц|клиник|врач/i.test(s)) return 'Медицина';
@@ -192,18 +213,22 @@ function guessIndustry(s) {
   if (/edtech|образован/i.test(s)) return 'Образование';
   return '';
 }
+
 function guessDecisionMakers(s) {
   if (!s) return '';
   if (/ген\w*\s+директ/iu.test(s)) return 'Генеральный директор';
   if (/собственник|владелец/i.test(s)) return 'Собственник';
   return '';
 }
+
 function guessDecisionTimeline(s) {
   if (!s) return '';
   if (/после отпуска/i.test(s)) return 'После отпуска';
   if (/на следующей неделе/i.test(s)) return 'На следующей неделе';
   return '';
 }
+
 function guessBudget(s) {
-  const m = s?.match
+  const m = s?.match(/(\d+[\s\d]*)\s*(тыс|руб|р\.|USD|\$|€)/i);
+  return m ? m[1] + ' ' + (m[2] || 'руб') : '';
 }
