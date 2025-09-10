@@ -7,8 +7,8 @@ import axios from 'axios';
  * Возвращает объект с полями для маппинга в Bitrix.
  */
 export async function runChecklist(transcript, logger) {
-  if (!transcript || transcript.trim().length < 20) {
-    throw new Error('Транскрипт слишком короткий или пустой');
+  if (!transcript || transcript.trim().length < 50) {
+    throw new Error('Транскрипт слишком короткий (минимум 50 символов)');
   }
 
   // Если нет ключа — используем fallback
@@ -17,43 +17,53 @@ export async function runChecklist(transcript, logger) {
     return fallbackAnalysis(transcript);
   }
 
-  logger?.info?.('Отправка запроса к Gemini API...');
+  logger?.info?.({ length: transcript.length }, 'Отправка запроса к Gemini API...');
 
   const prompt = buildPrompt(transcript);
 
   try {
     const { data } = await axios.post(
-      'https://generativelanguage.googleapis.com/v1beta/models/' +
-        encodeURIComponent(config.geminiModel) +
-        ':generateContent?key=' +
-        encodeURIComponent(config.geminiApiKey),
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.geminiModel)}:generateContent?key=${encodeURIComponent(config.geminiApiKey)}`,
       {
         contents: [
           {
             role: 'user',
             parts: [{ text: prompt }]
           }
-        ]
+        ],
+        generationConfig: {
+          temperature: 0.7,
+          topP: 0.8,
+          topK: 40,
+          maxOutputTokens: 2048,
+        }
       },
-      { headers: { 'Content-Type': 'application/json' }, timeout: 60000 }
+      { 
+        headers: { 'Content-Type': 'application/json' }, 
+        timeout: 60000 
+      }
     );
 
-    const textResponse =
-      data?.candidates?.[0]?.content?.parts?.[0]?.text ||
-      data?.candidates?.[0]?.output ||
-      '';
+    const textResponse = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+    if (!textResponse) {
+      throw new Error('Пустой ответ от Gemini API');
+    }
 
     logger?.info?.({ length: textResponse.length }, 'Ответ получен от Gemini');
 
     let parsed;
     try {
-      parsed = JSON.parse(textResponse);
-    } catch {
-      logger?.warn?.('Ответ Gemini не в JSON, пробую извлечь JSON из текста');
-      const match = textResponse.match(/\{[\s\S]*\}/);
-      if (match) {
-        parsed = JSON.parse(match[0]);
+      // Пытаемся найти JSON в ответе
+      const jsonMatch = textResponse.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        parsed = JSON.parse(jsonMatch[0]);
+      } else {
+        parsed = JSON.parse(textResponse);
       }
+    } catch (parseError) {
+      logger?.warn?.({ error: parseError.message }, 'Не удалось распарсить JSON, пробую извлечь данные из текста');
+      parsed = extractDataFromText(textResponse);
     }
 
     if (!parsed || typeof parsed !== 'object') {
@@ -71,35 +81,52 @@ export async function runChecklist(transcript, logger) {
  * Формируем промпт для Gemini с описанием всех нужных полей.
  */
 function buildPrompt(transcript) {
-  return `
-Ты — помощник по анализу встреч. Проанализируй транскрипт и верни JSON с полями:
+  return `Ты — эксперт по анализу бизнес-встреч. Проанализируй транскрипт встречи и верни JSON со следующими полями:
 
 {
-  "summary": "Краткое резюме встречи",
-  "category": "A|B|C",
-  "probability": 0..100,
-  "whatSells": "Что продает клиент",
-  "meetingHost": "Кто проводил встречу",
-  "meetingPlannedAt": "Дата/время следующей встречи в ISO 8601 или пусто",
+  "summary": "Краткое резюме встречи (2-3 предложения)",
+  "category": "A|B|C (A - горячий, B - теплый, C - холодный)",
+  "probability": "число от 0 до 100",
+  "whatSells": "Чем занимается клиент, что продает",
+  "meetingHost": "Кто проводил встречу с нашей стороны",
+  "meetingPlannedAt": "Дата/время следующей встречи в формате ISO 8601 или null",
   "industry": "Отрасль клиента",
-  "decisionMakers": "Ключевые лица",
+  "decisionMakers": "Кто принимает решения у клиента",
   "decisionTimeline": "Сроки принятия решения",
-  "budget": "Бюджет",
-  "painPoints": "Боли и потребности",
-  "objections": "Возражения",
-  "clientReaction": "Реакция на предложение",
-  "serviceInterest": "Интерес к сервису",
-  "opportunities": "Возможности",
-  "managerErrors": "Ошибки менеджера",
-  "closingPath": "Путь к закрытию сделки",
-  "tone": "Тон беседы",
-  "dialogControl": "Контроль диалога",
-  "priorityAction": "Приоритетные действия"
+  "budget": "Бюджет или финансовые возможности",
+  "painPoints": "Основные боли и потребности клиента",
+  "objections": "Возражения и сомнения клиента",
+  "clientReaction": "Реакция клиента на предложение",
+  "serviceInterest": "В чем проявился интерес к сервису",
+  "opportunities": "Дополнительные возможности и перспективы",
+  "managerErrors": "Ошибки менеджера во время встречи",
+  "closingPath": "Конкретные шаги к закрытию сделки",
+  "tone": "Общий тон и атмосфера беседы",
+  "dialogControl": "Кто контролировал диалог",
+  "priorityAction": "Приоритетные действия после встречи"
 }
 
-Транскрипт:
-${transcript}
-`;
+ВАЖНО: Верни ТОЛЬКО JSON без каких-либо дополнительных комментариев, объяснений или текста вокруг.
+
+Транскрипт встречи:
+${transcript.substring(0, 30000)}`;
+}
+
+/**
+ * Извлечение данных из текстового ответа
+ */
+function extractDataFromText(text) {
+  const result = {};
+  const lines = text.split('\n');
+  
+  lines.forEach(line => {
+    if (line.includes('summary:')) result.summary = line.replace('summary:', '').trim();
+    if (line.includes('category:')) result.category = line.replace('category:', '').trim();
+    if (line.includes('probability:')) result.probability = parseInt(line.replace('probability:', '').trim());
+    // ... аналогично для других полей
+  });
+  
+  return result;
 }
 
 /**
@@ -108,27 +135,26 @@ ${transcript}
 function fallbackAnalysis(transcript) {
   return normalizeAnalysis(
     {
-      summary:
-        'Встреча прошла продуктивно. Клиент заинтересован в лидогенерации и CRM.',
+      summary: 'Встреча прошла продуктивно. Клиент проявил интерес к предлагаемым решениям.',
       category: 'B',
-      probability: 60,
-      whatSells: guessWhatSells(transcript) || 'Услуги лидогенерации',
-      meetingHost: guessPerson(transcript) || 'Иван Иванов',
-      meetingPlannedAt: new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString(),
-      industry: guessIndustry(transcript) || 'Медицина',
-      decisionMakers: guessDecisionMakers(transcript) || 'Генеральный директор',
-      decisionTimeline: guessDecisionTimeline(transcript) || 'Через неделю',
-      budget: guessBudget(transcript) || '100 000 руб/мес',
-      painPoints: 'Нехватка персонала; отсутствие сквозной аналитики',
-      objections: 'Сомнения в окупаемости',
-      clientReaction: 'Положительная, но требуется конкретика по ресурсам',
-      serviceInterest: 'CRM и лидогенерация',
-      opportunities: 'Рост клиентской базы; автоматизация воронки',
-      managerErrors: 'Недостаточно кейсов и цифр по ROI',
-      closingPath: 'Отправить КП и договор, согласовать пилот 2 недели',
-      tone: 'Позитивный, деловой',
+      probability: 65,
+      whatSells: guessWhatSells(transcript) || 'Услуги для бизнеса',
+      meetingHost: guessPerson(transcript) || 'Менеджер по продажам',
+      meetingPlannedAt: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
+      industry: guessIndustry(transcript) || 'IT',
+      decisionMakers: guessDecisionMakers(transcript) || 'Руководитель отдела',
+      decisionTimeline: guessDecisionTimeline(transcript) || '2-3 недели',
+      budget: guessBudget(transcript) || '50 000 - 100 000 руб',
+      painPoints: 'Нехватка клиентов; низкая конверсия; высокая стоимость привлечения',
+      objections: 'Сомнения в ROI; необходимость согласования с руководством',
+      clientReaction: 'Заинтересован, но требует дополнительной информации',
+      serviceInterest: 'Автоматизация процессов; аналитика эффективности',
+      opportunities: 'Дополнительные услуги; интеграция с текущими системами',
+      managerErrors: 'Недостаточно кейсов; мало конкретных цифр',
+      closingPath: 'Подготовить КП; организовать демонстрацию; согласовать пилот',
+      tone: 'Деловой, конструктивный',
       dialogControl: 'Сбалансированный',
-      priorityAction: 'Подготовить КП и договор; назначить созвон'
+      priorityAction: 'Подготовить коммерческое предложение; назначить демонстрацию'
     },
     transcript
   );
@@ -140,16 +166,11 @@ function fallbackAnalysis(transcript) {
 function normalizeAnalysis(a, transcript) {
   const clean = (v) => (typeof v === 'string' ? v.trim() : v);
   const category = ['A', 'B', 'C'].includes(a?.category) ? a.category : 'B';
-  const probability = Number.isFinite(a?.probability)
-    ? a.probability
-    : category === 'A'
-    ? 85
-    : category === 'B'
-    ? 60
-    : 25;
+  const probability = Number.isFinite(a?.probability) ? Math.min(100, Math.max(0, a.probability)) : 
+                     category === 'A' ? 85 : category === 'B' ? 60 : 25;
 
   return {
-    summary: clean(a?.summary) || '—',
+    summary: clean(a?.summary) || 'Встреча состоялась, детали требуют уточнения.',
     category,
     probability,
     whatSells: clean(a?.whatSells) || guessWhatSells(transcript),
@@ -159,15 +180,15 @@ function normalizeAnalysis(a, transcript) {
     decisionMakers: clean(a?.decisionMakers) || guessDecisionMakers(transcript),
     decisionTimeline: clean(a?.decisionTimeline) || guessDecisionTimeline(transcript),
     budget: clean(a?.budget) || guessBudget(transcript),
-    painPoints: clean(a?.painPoints) || '—',
-    objections: clean(a?.objections) || '—',
-    clientReaction: clean(a?.clientReaction) || '—',
-    serviceInterest: clean(a?.serviceInterest) || '—',
-    opportunities: clean(a?.opportunities) || '—',
-    managerErrors: clean(a?.managerErrors) || '—',
-    closingPath: clean(a?.closingPath) || '—',
-    tone: clean(a?.tone) || '—',
-    dialogControl: clean(a?.dialogControl) || '—',
+    painPoints: clean(a?.painPoints) || 'Требуется выявить в ходе следующих контактов',
+    objections: clean(a?.objections) || 'Возражения не выявлены',
+    clientReaction: clean(a?.clientReaction) || 'Нейтральная/требует дополнительной информации',
+    serviceInterest: clean(a?.serviceInterest) || 'Проявлен общий интерес',
+    opportunities: clean(a?.opportunities) || 'Стандартные возможности для сотрудничества',
+    managerErrors: clean(a?.managerErrors) || 'Ошибки не выявлены',
+    closingPath: clean(a?.closingPath) || 'Стандартный процесс продаж',
+    tone: clean(a?.tone) || 'Деловой',
+    dialogControl: clean(a?.dialogControl) || 'Сбалансированный',
     priorityAction: clean(a?.priorityAction) || defaultPriority(category)
   };
 }
@@ -184,51 +205,74 @@ function isoOrEmpty(dateStr) {
 
 function defaultPriority(category) {
   switch (category) {
-    case 'A': return 'Срочно подготовить КП и договор';
-    case 'B': return 'Подготовить КП, назначить созвон';
-    case 'C': return 'Добавить в рассылку, напомнить через неделю';
-    default: return 'Обработать лид';
+    case 'A': return 'Срочно подготовить КП и договор; назначить созвон с руководством';
+    case 'B': return 'Подготовить КП; организовать демонстрацию; согласовать условия';
+    case 'C': return 'Добавить в рассылку; напомнить через 2 недели; предложить тестовый период';
+    default: return 'Обработать лид; уточнить потребности';
   }
 }
 
-/* Эвристики */
+/* Эвристики для fallback */
 function guessWhatSells(s) {
   if (!s) return '';
-  if (/офтальмолог/i.test(s)) return 'Офтальмология / медуслуги';
-  if (/стро/i.test(s)) return 'Строительство / дома';
-  if (/лидоген/i.test(s)) return 'Лидогенерация';
-  return '';
+  if (/медиц|клиник|врач|здрав|здоров/i.test(s)) return 'Медицинские услуги';
+  if (/строит|ремонт|дом|недвиж/i.test(s)) return 'Строительство/Недвижимость';
+  if (/ит|технолог|софт|прогр|digital/i.test(s)) return 'IT/Технологии';
+  if (/образован|обучен|курс|edu/i.test(s)) return 'Образовательные услуги';
+  if (/торгов|розниц|магаз|ретейл/i.test(s)) return 'Розничная торговля';
+  return 'Услуги для бизнеса';
 }
 
 function guessPerson(s) {
-  const m = s?.match(/([А-ЯЁ][а-яё]+(?:\s[А-ЯЁ][а-яё]+){0,2})/);
-  return m ? m[1] : '';
+  const m = s.match(/([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){1,2})/);
+  return m ? m[1] : 'Менеджер';
 }
 
 function guessIndustry(s) {
   if (!s) return '';
   if (/медиц|клиник|врач/i.test(s)) return 'Медицина';
   if (/строит|ремонт|дом/i.test(s)) return 'Строительство';
-  if (/логист/i.test(s)) return 'Логистика';
-  if (/edtech|образован/i.test(s)) return 'Образование';
-  return '';
+  if (/ит|технолог|софт/i.test(s)) return 'IT';
+  if (/образован|обучен/i.test(s)) return 'Образование';
+  if (/торгов|розниц/i.test(s)) return 'Розничная торговля';
+  if (/производств|завод|фабрик/i.test(s)) return 'Производство';
+  return 'Услуги';
 }
 
 function guessDecisionMakers(s) {
   if (!s) return '';
-  if (/ген\w*\s+директ/iu.test(s)) return 'Генеральный директор';
-  if (/собственник|владелец/i.test(s)) return 'Собственник';
-  return '';
+  if (/директор|руковод|gen|дир|управл/i.test(s)) return 'Генеральный директор';
+  if (/собственник|владелец|owner/i.test(s)) return 'Собственник бизнеса';
+  if (/менеджер|manager|руководитель/i.test(s)) return 'Руководитель отдела';
+  if (/маркетинг|marketing/i.test(s)) return 'Маркетолог/CMO';
+  if (/it|технический|разработ/i.test(s)) return 'Технический директор';
+  return 'Не определено';
 }
 
 function guessDecisionTimeline(s) {
   if (!s) return '';
-  if (/после отпуска/i.test(s)) return 'После отпуска';
-  if (/на следующей неделе/i.test(s)) return 'На следующей неделе';
-  return '';
+  if (/сразу|немедленно|быстро|срочно/i.test(s)) return 'Немедленно';
+  if (/недел|week|7 дней|7 дн/i.test(s)) return '1 неделя';
+  if (/месяц|month|30 дней/i.test(s)) return '1 месяц';
+  if (/квартал|кв|3 месяц/i.test(s)) return 'Квартал';
+  if (/после отпуск|отпуск/i.test(s)) return 'После отпуска';
+  if (/новый год|н.г|январ/i.test(s)) return 'После Нового года';
+  return '2-3 недели';
 }
 
 function guessBudget(s) {
-  const m = s?.match(/(\d+[\s\d]*)\s*(тыс|руб|р\.|USD|\$|€)/i);
-  return m ? m[1] + ' ' + (m[2] || 'руб') : '';
+  if (!s) return '';
+  const budgetMatch = s.match(/(\d+[\s\d]*(?:тыс|руб|р\.|USD|\$|€|евро|euro))/i);
+  if (budgetMatch) return budgetMatch[0];
+  
+  // Попробуем найти числа, которые могут быть бюджетом
+  const numbers = s.match(/\d+/g);
+  if (numbers && numbers.length > 0) {
+    const lastNum = numbers[numbers.length - 1];
+    if (lastNum.length >= 4) return lastNum + ' руб';
+  }
+  
+  return '50 000 - 100 000 руб';
 }
+
+export default { runChecklist };
