@@ -1,7 +1,7 @@
+// src/index.js
 import express from 'express';
 import pino from 'pino';
 import { config } from './config.js';
-import './telegram.js'; // Запускаем Telegram бота
 
 // Простая конфигурация логгера
 const logger = pino({
@@ -24,7 +24,14 @@ app.get('/health', (_, res) => {
     status: 'ok', 
     timestamp: new Date().toISOString(),
     service: 'Meeting Bot',
-    version: '1.0.0'
+    version: '1.0.0',
+    config: {
+      hasTelegramToken: !!config.telegramBotToken,
+      hasBitrixWebhook: !!config.bitrixWebhookUrl,
+      hasGeminiKey: !!config.geminiApiKey,
+      responsibleId: config.bitrixResponsibleId,
+      port: config.port
+    }
   });
 });
 
@@ -32,15 +39,9 @@ app.get('/health', (_, res) => {
 app.get('/', (_, res) => {
   res.json({ 
     message: 'Meeting Bot is running',
-    telegram_bot: 'Active',
-    endpoints: ['/health']
+    endpoints: ['/health'],
+    status: 'active'
   });
-});
-
-// Webhook endpoint для Telegram (если потребуется)
-app.post(`/bot${config.telegramBotToken?.split(':')[0]}:${config.telegramBotToken?.split(':')[1]}`, (req, res) => {
-  logger.info('Telegram webhook received');
-  res.status(200).send('OK');
 });
 
 // Обработка ошибок
@@ -53,7 +54,6 @@ app.use((error, req, res, next) => {
 const server = app.listen(config.port, '0.0.0.0', () => {
   logger.info(`🚀 Meeting Bot запущен и готов к работе`);
   logger.info(`🚀 Сервер запущен на порту ${config.port}`);
-  logger.info(`📱 Telegram Bot активен`);
   logger.info(`🌐 Health check: http://localhost:${config.port}/health`);
 });
 
