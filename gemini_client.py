@@ -21,27 +21,19 @@ genai.configure(api_key=GEMINI_API_KEY)
 
 # Универсальная сборка SAFETY_SETTINGS
 SAFETY_SETTINGS = {}
-
 if hasattr(HarmCategory, "HARM_CATEGORY_HATE_SPEECH"):
     SAFETY_SETTINGS[getattr(HarmCategory, "HARM_CATEGORY_HATE_SPEECH")] = HarmBlockThreshold.BLOCK_NONE
-
 if hasattr(HarmCategory, "HARM_CATEGORY_HARASSMENT"):
     SAFETY_SETTINGS[getattr(HarmCategory, "HARM_CATEGORY_HARASSMENT")] = HarmBlockThreshold.BLOCK_NONE
-
 if hasattr(HarmCategory, "HARM_CATEGORY_SEXUAL"):
     SAFETY_SETTINGS[getattr(HarmCategory, "HARM_CATEGORY_SEXUAL")] = HarmBlockThreshold.BLOCK_NONE
 elif hasattr(HarmCategory, "HARM_CATEGORY_SEXUALLY_EXPLICIT"):
     SAFETY_SETTINGS[getattr(HarmCategory, "HARM_CATEGORY_SEXUALLY_EXPLICIT")] = HarmBlockThreshold.BLOCK_NONE
-
 if hasattr(HarmCategory, "HARM_CATEGORY_DANGEROUS_CONTENT"):
     SAFETY_SETTINGS[getattr(HarmCategory, "HARM_CATEGORY_DANGEROUS_CONTENT")] = HarmBlockThreshold.BLOCK_NONE
 
 
 def sanitize_transcript_for_safety(text: str) -> str:
-    """
-    Убирает или заменяет слова, которые могут триггерить фильтры Gemini,
-    но не важны для бизнес-анализа.
-    """
     if not text:
         return text
     replacements = {
@@ -57,7 +49,10 @@ def sanitize_transcript_for_safety(text: str) -> str:
 
 def _prompt(transcript: str) -> str:
     return f"""
-Ты — эксперт по продажам. Проанализируй транскрипт по чеклисту и верни JSON с полями:
+Ты — эксперт по продажам. Проанализируй транскрипт по чеклисту и верни результат в двух частях:
+
+1) Человекочитаемый анализ (текст).
+2) В конце ответа — один корректный JSON-объект (без лишнего текста после него) со следующими ключами:
 analysis, wow_effect, client_type_text, bad_reason_text, product, task_formulation,
 ad_budget, is_lpr, meeting_scheduled, meeting_done, kp_done_text, lpr_confirmed_text.
 
@@ -67,13 +62,8 @@ ad_budget, is_lpr, meeting_scheduled, meeting_done, kp_done_text, lpr_confirmed_
 
 
 def extract_last_json(text: str) -> Tuple[Dict[str, Any], int]:
-    """
-    Ищет последний корректный JSON-объект в тексте.
-    Возвращает (dict, позиция_начала) или (None, -1).
-    """
     last_json = None
     last_pos = -1
-    # Ищем с конца текста
     for start in range(len(text)):
         if text[start] == '{':
             try:
@@ -87,15 +77,12 @@ def extract_last_json(text: str) -> Tuple[Dict[str, Any], int]:
 
 
 def analyze_transcript_structured(transcript: str) -> Tuple[str, Dict[str, Any]]:
-    """
-    Возвращает (analysis_text, data_dict) — человекочитаемый анализ и структурированные поля.
-    """
     if not transcript or len(transcript.strip()) < 10:
         raise ValueError("Транскрипт слишком короткий или пустой")
 
     model = genai.GenerativeModel(MODEL_NAME)
-
     last_err = None
+
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             resp = model.generate_content(
@@ -108,14 +95,12 @@ def analyze_transcript_structured(transcript: str) -> Tuple[str, Dict[str, Any]]
                 raise RuntimeError("Пустой ответ модели")
 
             parsed, cut_index = extract_last_json(text)
-            if not parsed or not isinstance(parsed, dict):
-                raise RuntimeError("Не удалось извлечь JSON из ответа модели")
-
-            analysis_text = text
-            if cut_index > 0:
-                analysis_text = analysis_text[:cut_index].strip()
-
-            return analysis_text, parsed
+            if parsed and isinstance(parsed, dict):
+                analysis_text = text[:cut_index].strip() if cut_index > 0 else text
+                return analysis_text, parsed
+            else:
+                log.warning("JSON не найден, возвращаю только текст анализа")
+                return text, {}
 
         except Exception as e:
             last_err = e
