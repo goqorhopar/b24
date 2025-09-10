@@ -6,25 +6,28 @@ services:
     buildCommand: npm install
     startCommand: npm start
     envVars:
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: BITRIX_WEBHOOK_URL
-        sync: false
-      - key: BITRIX_RESPONSIBLE_ID
-        sync: false
-      - key: NODE_ENV
-        value: production
       - key: PORT
         value: 3000
+      - key: NODE_ENV
+        value: production
       - key: LOG_LEVEL
         value: info
+      - key: TELEGRAM_BOT_TOKEN
+        value: 8431167006:AAGuq0b1t119i7Lzac7idKUtwbwzH-FxqHA
+      - key: GEMINI_API_KEY
+        value: AIzaSyDQR42zm4pcRMkY9KzKvEmXm7hyR8UzxHI
+      - key: ADMIN_CHAT_ID
+        value: 7537953397
       - key: RENDER_EXTERNAL_URL
         fromService:
           type: web
           name: meeting-bot
           property: url
+      # Эти переменные нужно установить вручную в панели Render
+      - key: BITRIX_WEBHOOK_URL
+        sync: false
+      - key: BITRIX_RESPONSIBLE_ID
+        sync: false
       # Опциональные переменные
       - key: BITRIX_CREATED_BY_ID
         sync: false
