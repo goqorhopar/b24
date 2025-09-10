@@ -25,7 +25,10 @@ if (token) {
   try {
     bot = new TelegramBot(token, { polling: true });
     logger.info('🚀 Telegram Bot запущен в режиме polling');
+    logger.info('📱 Telegram Bot активен');
+    logger.info('🌐 Health check: http://localhost:3000/health');
 
+    // /start
     bot.onText(/\/start/, (msg) => {
       bot.sendMessage(msg.chat.id, '🤖 Отправьте транскрипт встречи для анализа.');
     });
@@ -37,7 +40,7 @@ if (token) {
 
       const state = userStates.get(chatId);
 
-      // Шаг 1: получаем транскрипт
+      // Шаг 1: транскрипт
       if (!state) {
         userStates.set(chatId, { step: 'awaitingLeadId', transcript: text });
         logger.info(`Чат ${chatId}: транскрипт сохранён`);
@@ -45,7 +48,7 @@ if (token) {
         return;
       }
 
-      // Шаг 2: получаем ID лида
+      // Шаг 2: ID лида → анализ → обновление → задача
       if (state.step === 'awaitingLeadId') {
         if (!/^[0-9]+$/.test(text)) {
           await bot.sendMessage(chatId, '❌ ID лида должен быть числом. Попробуйте снова:');
@@ -63,17 +66,23 @@ if (token) {
           const report = formatAnalysisReport(analysisResult);
 
           // Обновляем лид
+          logger.info(`Обновляю лид ${leadId} через Bitrix24 webhook...`);
           await bitrixService.updateLead(leadId, analysisResult, state.transcript, 'Telegram Bot', logger);
-          logger.info(`✅ Лид ${leadId} обновлён`);
+          logger.info({ leadId }, '✅ Лид успешно обновлён в Bitrix');
 
-          // Создаём задачу в Bitrix
-          await bitrixService.createTask({
-            title: `Анализ встречи по лиду ${leadId}`,
-            description: report,
-            leadId,
-            source: 'Telegram Bot'
-          }, logger);
-          logger.info(`📌 Задача создана для лида ${leadId}`);
+          // Создаём задачу
+          try {
+            const taskTitle = `Анализ встречи по лиду ${leadId} (${analysisResult.category || '—'})`;
+            const { taskId } = await bitrixService.createTask({
+              title: taskTitle,
+              description: report,
+              leadId,
+              source: 'Telegram Bot'
+            }, logger);
+            logger.info({ leadId, taskId }, '📌 Задача создана и привязана к лиду');
+          } catch (taskErr) {
+            logger.warn({ leadId, error: taskErr.message }, 'Не удалось создать задачу');
+          }
 
           // Отправляем отчёт менеджеру
           for (const part of splitMessage(report)) {
@@ -81,118 +90,65 @@ if (token) {
           }
 
         } catch (err) {
-          logger.error(err, 'Ошибка анализа или обновления лида');
+          logger.error({ err }, 'Ошибка анализа или обновления лида');
           await bot.sendMessage(chatId, `❌ Ошибка: ${err.message}`);
         } finally {
           userStates.delete(chatId);
+          logger.info(`Чат ${chatId}: процесс завершён, состояние сброшено`);
         }
       }
     });
 
-    bot.on('polling_error', (error) => logger.error(error, 'Polling error'));
-    bot.on('webhook_error', (error) => logger.error(error, 'Webhook error'));
+    bot.on('polling_error', (error) => logger.error({ error }, 'Polling error'));
+    bot.on('webhook_error', (error) => logger.error({ error }, 'Webhook error'));
 
   } catch (error) {
-    logger.error(error, 'Failed to initialize Telegram bot');
+    logger.error({ error }, 'Failed to initialize Telegram bot');
   }
 } else {
   logger.warn('TELEGRAM_BOT_TOKEN не задан. Бот не запущен.');
 }
 
-// === Форматирование отчёта ===
+// Красивый отчёт для менеджера
 function formatAnalysisReport(a) {
   return `
 📊 *РЕЗУЛЬТАТЫ АНАЛИЗА ВСТРЕЧИ*
 
-1. *Анализ бизнеса:* Компания предоставляет услуги, требуется уточнение бизнес-модели.
-2. *Боли и потребности:* Нужна система для генерации лидов.
-3. *Возражения:* Есть сомнения, требуют проработки.
-4. *Реакция на модель:* Проявлен интерес к IT-решению.
-5. *Интерес к сервису:* Квалифицированные лиды и CRM.
-6. *Возможности:* Рост клиентской базы через новые каналы.
-7. *Ошибки менеджера:* Нет явных, но стоит уточнить детали.
-8. *Путь к закрытию:* КП и договор, обсуждение условий.
-9. *Тон беседы:* Позитивный, заинтересованный.
-10. *Контроль диалога:* Сбалансированный.
-11. *Рекомендации:* ${getRecommendationsByCategory(a.category)}
-12. *Категория клиента:* ${a.category}. ${getCategoryExplanation(a.category)}
+1. *Анализ бизнеса:* ${a.businessAnalysis || 'Компания предоставляет услуги; требуется уточнение бизнес-модели.'}
+2. *Боли и потребности:* ${a.painPoints || '—'}
+3. *Возражения:* ${a.objections || '—'}
+4. *Реакция на модель:* ${a.clientReaction || '—'}
+5. *Особый интерес к сервису:* ${a.serviceInterest || '—'}
+6. *Найденные возможности:* ${a.opportunities || '—'}
+7. *Ошибки менеджера:* ${a.managerErrors || '—'}
+8. *Путь к закрытию:* ${a.closingPath || '—'}
+9. *Тон беседы:* ${a.tone || '—'}
+10. *Контроль диалога:* ${a.dialogControl || '—'}
+11. *Рекомендации:* ${a.recommendations || a.priorityAction || '—'}
+12. *Категория клиента:* ${a.category || '—'} (вероятность ${a.probability ?? '—'}%)
 
-*Отрасль:* ${extractIndustry(a.summary)}
-*Ключевые лица:* ${extractDecisionMakers(a.summary)}
-*Сроки решения:* ${extractDecisionTimeline(a.summary)}
-*Бюджет:* ${extractBudget(a.summary)}
-*Приоритет:* ${getPriorityActionByCategory(a.category)}
-*Вероятность сделки:* ${getProbabilityByCategory(a.category)}%
+*Отрасль:* ${a.industry || '—'}
+*Ключевые лица:* ${a.decisionMakers || '—'}
+*Сроки решения:* ${a.decisionTimeline || '—'}
+*Бюджет:* ${a.budget || '—'}
+*Приоритет:* ${a.priorityAction || '—'}
+
+🧾 *Сводка:*
+${a.summary || '—'}
 `.trim();
 }
 
-// === Вспомогательные функции ===
-function extractIndustry(s) {
-  if (s.includes('строительство')) return 'Строительство';
-  if (s.includes('IT') || s.includes('разработка')) return 'IT';
-  if (s.includes('медицина')) return 'Медицина';
-  return 'Не определена';
-}
-
-function extractDecisionMakers(s) {
-  const match = s.match(/(?:директор|менеджер|руководитель|владелец)\\s([А-ЯЁ][а-яё]+(?:\\s[А-ЯЁ][а-яё]+)?)/);
-  return match ? match[1] : 'Не указаны';
-}
-
-function extractDecisionTimeline(s) {
-  if (s.includes('после отпуска')) return 'После отпуска (с 3 по 15 число)';
-  if (s.includes('в течение недели')) return 'В течение недели';
-  return 'Не определены';
-}
-
-function extractBudget(s) {
-  const match = s.match(/(\\d+[\\s\\u00A0]*(?:тыс|000|руб|рублей|тысяч))/i);
-  return match ? match[1] : 'Не указан';
-}
-
-function getRecommendationsByCategory(c) {
-  return {
-    A: 'Подготовить КП и договор, обсудить кадровые решения.',
-    B: 'Отправить презентацию, назначить повторный звонок.',
-    C: 'Добавить в nurturing, выяснить причины отказа.'
-  }[c] || 'Уточнить интерес клиента.';
-}
-
-function getCategoryExplanation(c) {
-  return {
-    A: 'Тёплый клиент. Готов к сотрудничеству.',
-    B: 'Средний интерес. Требуется доработка.',
-    C: 'Холодный. Низкая вовлечённость.'
-  }[c] || 'Категория не определена.';
-}
-
-function getPriorityActionByCategory(c) {
-  return {
-    A: 'Подготовить договор и КП.',
-    B: 'Отправить презентацию.',
-    C: 'Добавить в nurturing.'
-  }[c] || 'Определить шаги.';
-}
-
-function getProbabilityByCategory(c) {
-  return {
-    A: 85,
-    B: 60,
-    C: 25
-  }[c] || 50;
-}
-
-// === Разделение длинных сообщений ===
+// Разделение длинных сообщений
 function splitMessage(message, maxLength = 4000) {
   if (message.length <= maxLength) return [message];
   const parts = [];
   let current = '';
-  for (const line of message.split('\\n')) {
-    if ((current + line + '\\n').length > maxLength) {
+  for (const line of message.split('\n')) {
+    if ((current + line + '\n').length > maxLength) {
       parts.push(current.trim());
       current = '';
     }
-    current += line + '\\n';
+    current += line + '\n';
   }
   if (current.trim()) parts.push(current.trim());
   return parts;
