@@ -204,8 +204,17 @@ def create_task(lead_id: str, title: str, description: str, responsible_id: str 
     if not title or not title.strip():
         raise BitrixError("Заголовок задачи пустой")
 
+    # Ответственный и создатель — целые числа
     if not responsible_id:
         responsible_id = BITRIX_RESPONSIBLE_ID
+    try:
+        responsible_id_int = int(str(responsible_id).strip())
+    except Exception:
+        raise BitrixError(f"RESPONSIBLE_ID некорректен: {responsible_id}")
+    try:
+        created_by_int = int(str(BITRIX_CREATED_BY_ID).strip())
+    except Exception:
+        created_by_int = responsible_id_int
 
     # Рассчитываем дедлайн
     deadline_date = deadline or (datetime.now() + timedelta(days=BITRIX_TASK_DEADLINE_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
@@ -215,21 +224,30 @@ def create_task(lead_id: str, title: str, description: str, responsible_id: str 
     if len(description) > max_desc_length:
         description = description[:max_desc_length] + "\n\n[Описание обрезано]"
 
-    data = {
-        'fields': {
-            'TITLE': f"[Лид {lead_id}] {title}",
-            'DESCRIPTION': description,
-            'RESPONSIBLE_ID': responsible_id,
-            'CREATED_BY': BITRIX_CREATED_BY_ID,
-            'DEADLINE': deadline_date,
-            'UF_CRM_TASK': [f'L_{lead_id.strip()}'],  # Связываем с лидом
-            'PRIORITY': '1',  # Высокий приоритет
-            'GROUP_ID': '0'   # Общая группа
-        }
+    fields: Dict[str, Any] = {
+        'TITLE': f"[Лид {lead_id}] {title}",
+        'DESCRIPTION': description,
+        'RESPONSIBLE_ID': responsible_id_int,
+        'CREATED_BY': created_by_int,
+        'DEADLINE': deadline_date,
+        'UF_CRM_TASK': [f"L_{str(lead_id).strip()}"]
     }
+    # Приоритет: 2 — высокий
+    fields['PRIORITY'] = 2
+    # GROUP_ID указывать только если валидное положительное число
+    try:
+        group_id = int('0')
+        if group_id > 0:
+            fields['GROUP_ID'] = group_id
+    except Exception:
+        pass
+
+    data = {'fields': fields}
 
     log.info(f"Создание задачи для лида {lead_id}: {title}")
-    return _make_bitrix_request('tasks.task.add.json', data)
+    resp = _make_bitrix_request('tasks.task.add.json', data)
+    log.info(f"Результат создания задачи для лида {lead_id}: {json.dumps(resp, ensure_ascii=False)[:1000]}")
+    return resp
 
 
 # ---- Дополнительные функции-обёртки, ожидаемые main.py ----
