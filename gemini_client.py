@@ -1,360 +1,517 @@
+# gemini_client.py
 import os
-import requests
 import logging
 import time
-from typing import Optional, Dict, Any, Tuple, List
-from urllib.parse import urljoin
-from datetime import datetime, timedelta
+import re
 import json
+from typing import Dict, Any, Optional
+from datetime import datetime
+import requests
+
+# Попытка импортировать google.generativeai (работает с разными версиями)
+try:
+    import google.generativeai as genai  # type: ignore
+except Exception as exc:
+    raise RuntimeError(f"Невозможно импортировать google.generativeai: {exc}")
+
+# Попытка импортировать типы безопасности (в некоторых версиях их может не быть)
+try:
+    from google.generativeai.types import HarmCategory, HarmBlockThreshold  # type: ignore
+except Exception:
+    HarmCategory = None
+    HarmBlockThreshold = None  # type: ignore
 
 log = logging.getLogger(__name__)
 
-BITRIX_WEBHOOK_URL = os.getenv('BITRIX_WEBHOOK_URL')
-BITRIX_RESPONSIBLE_ID = os.getenv('BITRIX_RESPONSIBLE_ID', '1')
-BITRIX_CREATED_BY_ID = os.getenv('BITRIX_CREATED_BY_ID', '1')
-BITRIX_TASK_DEADLINE_DAYS = int(os.getenv('BITRIX_TASK_DEADLINE_DAYS', '3'))
+# Конфигурация из окружения
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
+RETRY_DELAY = float(os.getenv("RETRY_DELAY", "2"))
 
-REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '30'))
-MAX_RETRIES = int(os.getenv('MAX_RETRIES', '3'))
-RETRY_DELAY = float(os.getenv('RETRY_DELAY', '2'))
-MAX_COMMENT_LENGTH = int(os.getenv('MAX_COMMENT_LENGTH', '8000'))
+if not GEMINI_API_KEY:
+    raise RuntimeError("GEMINI_API_KEY не найден в переменных окружения!")
+
+# Настройка ключа
+try:
+    genai.configure(api_key=GEMINI_API_KEY)
+except Exception as e:
+    # Не фатальная ошибка — дальше в вызовах мы обработаем возможные ошибки
+    log.debug(f"genai.configure вызвало исключение: {e}")
+
+# Безопасностные настройки (если поддерживаются)
+SAFETY_SETTINGS = {}
+if HarmCategory is not None and HarmBlockThreshold is not None:
+    try:
+        categories = [
+            'HARM_CATEGORY_HATE_SPEECH',
+            'HARM_CATEGORY_HARASSMENT',
+            'HARM_CATEGORY_SEXUAL',
+            'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+            'HARM_CATEGORY_DANGEROUS_CONTENT',
+        ]
+        for name in categories:
+            if hasattr(HarmCategory, name):
+                cat = getattr(HarmCategory, name)
+                SAFETY_SETTINGS[cat] = HarmBlockThreshold.BLOCK_NONE
+        log.debug("SAFETY_SETTINGS установлены")
+    except Exception:
+        SAFETY_SETTINGS = {}
+
+# ---- Вспомогательные функции ----
+
+def sanitize_transcript_for_safety(text: str) -> str:
+    """
+    Подменяет потенциально проблемные слова, чтобы снизить вероятность триггеров фильтров
+    и убрать грубую лексику перед отправкой в модель.
+    """
+    if not text:
+        return text
+
+    replacements = {
+        r"\bсекс\w*\b": "интимн.",
+        r"\bэрот\w*\b": "эр.",
+        r"\bпорно\w*\b": "взр.контент",
+        r"\bубить\b": "устранить",
+        r"\bубийство\b": "устранение",
+        r"\bнасилие\b": "принуждение",
+        r"\bнаркотик\w*\b": "запр.вещество",
+        # мат
+        r"\bбля\w*\b": "блин",
+        r"\bхуй\w*\b": "фиг",
+        r"\bпизд\w*\b": "плохо"
+    }
+
+    cleaned = text
+    for pattern, repl in replacements.items():
+        cleaned = re.sub(pattern, repl, cleaned, flags=re.IGNORECASE)
+    return cleaned
 
 
-class BitrixError(Exception):
-    pass
+def _build_analysis_prompt(transcript: str) -> str:
+    """
+    Формирует подробный промпт для модели.
+    Возвращаемый текст ориентирован на получение JSON-структуры с определёнными полями.
+    """
+    current_date = datetime.now().strftime("%d.%m.%Y")
+    prompt = (
+        f"Ты — эксперт-аналитик по продажам в digital-агентстве. Сегодня {current_date}.\n\n"
+        "ЗАДАЧА: Проанализируй транскрипт встречи с потенциальным клиентом и верни JSON со следующими полями "
+        "(все поля должны присутствовать, отсутствующие — null):\n\n"
+        '{"analysis","wow_effect","product","task_formulation","ad_budget","closing_comment",'
+        '"is_lpr","meeting_scheduled","meeting_done",'
+        '"client_type_text","bad_reason_text","kp_done_text","lpr_confirmed_text","source_text","our_product_text",'
+        '"meeting_date","planned_meeting_date","meeting_responsible_id"}\n\n'
+        "Укажи boolean поля как true/false/null, строковые поля — как строки или null. "
+        "Для дат используй формат YYYY-MM-DD или YYYY-MM-DD HH:MM:SS. "
+        "Возвращай ТОЛЬКО корректный JSON-объект, без дополнительного текста.\n\n"
+        "ТРАНСКРИПТ:\n```\n" + transcript.strip() + "\n```\n"
+    )
+    return prompt
 
 
-def _make_bitrix_request(method: str, data: Dict[str, Any], retries: int = MAX_RETRIES) -> Dict[str, Any]:
-    """Универсальный метод для запросов к Bitrix24"""
-    if not BITRIX_WEBHOOK_URL:
-        raise BitrixError("BITRIX_WEBHOOK_URL не настроен")
+def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
+    """
+    Ищет JSON-объект в текстовом ответе модели.
+    Поддерживает блоки ```json``` и "сырой" JSON.
+    """
+    if not text:
+        return None
 
-    url = urljoin(BITRIX_WEBHOOK_URL.rstrip('/') + '/', method)
-    log.info(f"Bitrix request to {method}: {json.dumps(data, ensure_ascii=False)[:500]}")
+    # 1) JSON в ```json ... ```
+    m = re.search(r'```json\\s*(\\{.*\\})\\s*```', text, re.DOTALL | re.IGNORECASE)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    # 2) Ищем наиболее длинный корректный JSON-объект методом скобочного стека
+    brace_stack = []
+    start = None
+    candidates = []
+    for i, ch in enumerate(text):
+        if ch == '{':
+            if start is None:
+                start = i
+            brace_stack.append('{')
+        elif ch == '}' and brace_stack:
+            brace_stack.pop()
+            if not brace_stack and start is not None:
+                candidate = text[start:i+1]
+                candidates.append(candidate)
+                start = None
+
+    # Сортируем кандидаты по длине (большие предпочтительнее)
+    candidates.sort(key=len, reverse=True)
+    for cand in candidates:
+        try:
+            parsed = json.loads(cand)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            continue
+
+    # 3) Попытка найти простой JSON по regex (последняя инстанция)
+    json_matches = re.findall(r'\\{(?:[^{}]|\\{[^{}]*\\})*\\}', text, re.DOTALL)
+    for match in sorted(json_matches, key=len, reverse=True):
+        try:
+            parsed = json.loads(match)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            continue
+
+    return None
+
+
+def validate_gemini_output(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Приводит выход модели к ожидаемому набору полей и типов.
+    Нормализует булевы поля, оставляет все ожидаемые ключи.
+    """
+    expected_fields = [
+        "analysis", "wow_effect", "product", "task_formulation", "ad_budget", "closing_comment",
+        "is_lpr", "meeting_scheduled", "meeting_done",
+        "client_type_text", "bad_reason_text", "kp_done_text", "lpr_confirmed_text", "source_text", "our_product_text",
+        "meeting_date", "planned_meeting_date", "meeting_responsible_id"
+    ]
+
+    normalized: Dict[str, Any] = {}
+    for f in expected_fields:
+        v = data.get(f) if isinstance(data, dict) else None
+
+        # булевые поля
+        if f in ("is_lpr", "meeting_scheduled", "meeting_done"):
+            if isinstance(v, bool):
+                normalized[f] = v
+            elif isinstance(v, (int, float)):
+                normalized[f] = bool(v)
+            elif isinstance(v, str):
+                vs = v.strip().lower()
+                if vs in ("yes", "true", "да", "1"):
+                    normalized[f] = True
+                elif vs in ("no", "false", "нет", "0"):
+                    normalized[f] = False
+                else:
+                    normalized[f] = None
+            else:
+                normalized[f] = None
+        else:
+            # сохраняем значение или None
+            normalized[f] = v if v is not None else None
+
+    return normalized
+
+
+# ---- Вызов модели: универсальный и надёжный ----
+
+def _call_gemini(prompt: str, model: Optional[str] = None, max_tokens: int = 1200) -> str:
+    """
+    Умный обёртывающий вызов Gemini с ретраями.
+    Попробует несколько возможных путей вызова в зависимости от версии библиотеки:
+      1) genai.GenerativeModel(...).generate_content(...)
+      2) genai.generate_text(...) (если доступно)
+      3) genai.create_chat_completion(...) (старые интерфейсы)
+    Возвращает сырой текст-ответ модели.
+    """
+    if model is None:
+        model = MODEL_NAME
 
     last_exc = None
-    for attempt in range(retries):
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
-            response = requests.post(
-                url,
-                json=data,
-                timeout=REQUEST_TIMEOUT,
-                headers={
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json'
+            # 1) Попытка через GenerativeModel (современные версии)
+            if hasattr(genai, "GenerativeModel"):
+                try:
+                    ModelClass = getattr(genai, "GenerativeModel")
+                    model_obj = ModelClass(model)
+                    # Попытка вызвать generate_content
+                    if hasattr(model_obj, "generate_content"):
+                        resp = model_obj.generate_content(
+                            prompt,
+                            generation_config={"max_output_tokens": max_tokens},
+                            safety_settings=SAFETY_SETTINGS or None
+                        )
+                        # возращаем текст — в разных версиях может быть .text или .output
+                        if hasattr(resp, "text"):
+                            return resp.text
+                        if isinstance(resp, dict) and "output" in resp:
+                            out = resp.get("output")
+                            if isinstance(out, dict):
+                                # возможна структура {'content': '...'} или candidates
+                                if "content" in out:
+                                    return str(out["content"])
+                                # кандидаты
+                                candidates = out.get("candidates")
+                                if candidates and isinstance(candidates, list) and len(candidates) > 0:
+                                    cand = candidates[0]
+                                    if isinstance(cand, dict):
+                                        return cand.get("content", "") or str(cand)
+                                    return str(cand)
+                            return str(resp)
+                        # как fallback
+                        return str(resp)
+                    # если нет generate_content — попробовать generate_text
+                    if hasattr(model_obj, "generate_text"):
+                        resp = model_obj.generate_text(prompt, max_output_tokens=max_tokens)
+                        if hasattr(resp, "text"):
+                            return resp.text
+                        return str(resp)
+                except Exception as e:
+                    log.debug(f"Попытка вызова через GenerativeModel провалилась: {e}")
+                    # если упало здесь — пробуем другие варианты
+                    last_exc = e
+
+            # 2) genai.generate_text (возможно в модуле)
+            if hasattr(genai, "generate_text"):
+                try:
+                    func = getattr(genai, "generate_text")
+                    resp = func(model=model, prompt=prompt, max_output_tokens=max_tokens)
+                    # обработка возможных структур
+                    if isinstance(resp, dict):
+                        if "candidates" in resp and resp["candidates"]:
+                            cand = resp["candidates"][0]
+                            if isinstance(cand, dict) and "content" in cand:
+                                return cand["content"]
+                            return str(cand)
+                        if "output" in resp:
+                            out = resp["output"]
+                            if isinstance(out, dict) and "content" in out:
+                                return out["content"]
+                            return str(out)
+                    # если объект имеет .text
+                    if hasattr(resp, "text"):
+                        return resp.text
+                    return str(resp)
+                except Exception as e:
+                    log.debug(f"genai.generate_text провалился: {e}")
+                    last_exc = e
+
+            # 3) Старые интерфейсы: create_chat_completion (редко в новых версиях)
+            if hasattr(genai, "create_chat_completion"):
+                try:
+                    resp = genai.create_chat_completion(model=model, messages=[{"role": "user", "content": prompt}], max_output_tokens=max_tokens)
+                    # обычно resp.candidates[0].content
+                    if hasattr(resp, "candidates") and resp.candidates:
+                        return resp.candidates[0].content
+                    if isinstance(resp, dict):
+                        # попробовать получить глубже
+                        cand = resp.get("candidates")
+                        if cand and isinstance(cand, list):
+                            c0 = cand[0]
+                            if isinstance(c0, dict) and "content" in c0:
+                                return c0["content"]
+                    return str(resp)
+                except Exception as e:
+                    log.debug(f"create_chat_completion провалился: {e}")
+                    last_exc = e
+
+            # Если ни один интерфейс не найден — попробуем REST API как надёжный фолбэк
+            try:
+                api_key = GEMINI_API_KEY
+                if not api_key:
+                    raise RuntimeError("GEMINI_API_KEY не задан")
+                rest_model = model
+                # Попробуем привести названия к REST-идиомам, если указана укороченная форма
+                # Например: "gemini-1.5" -> "gemini-1.5-flash" (более доступная модель)
+                if rest_model in (None, "gemini-1.5"):
+                    rest_model = "gemini-1.5-flash"
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{rest_model}:generateContent?key={api_key}"
+                payload: Dict[str, Any] = {
+                    "contents": [
+                        {
+                            "role": "user",
+                            "parts": [{"text": prompt}]
+                        }
+                    ],
+                    "generationConfig": {"maxOutputTokens": max_tokens}
                 }
-            )
-            response.raise_for_status()
-            result = response.json()
+                headers = {"Content-Type": "application/json"}
+                r = requests.post(url, headers=headers, json=payload, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+                # В v1beta ответ обычно: candidates[0].content.parts[*].text
+                if isinstance(data, dict):
+                    candidates = data.get("candidates") or []
+                    if candidates:
+                        c0 = candidates[0]
+                        if isinstance(c0, dict):
+                            content = c0.get("content") or {}
+                            if isinstance(content, dict):
+                                parts = content.get("parts") or []
+                                texts = []
+                                for p in parts:
+                                    if isinstance(p, dict) and "text" in p:
+                                        texts.append(str(p["text"]))
+                                if texts:
+                                    return "\n".join(texts)
+                # Фолбэк — вернуть сырой JSON как строку
+                return r.text
+            except Exception as e:
+                last_exc = e
+                raise RuntimeError("Нет подходящего метода вызова Gemini в установленной версии google.generativeai")
 
-            log.info(f"Bitrix response for {method}: {json.dumps(result, ensure_ascii=False)[:1000]}")
-
-            # Bitrix may return 'result' or 'error'
-            if isinstance(result, dict) and result.get('error'):
-                error_msg = result.get('error_description', result.get('error', 'Неизвестная ошибка Bitrix API'))
-                log.error(f"Bitrix API error in {method}: {error_msg}")
-                raise BitrixError(f"{method}: {error_msg}")
-
-            return result
-        except requests.exceptions.Timeout:
-            last_exc = BitrixError(f"Таймаут запроса к Bitrix ({method})")
-            log.warning(f"Timeout для {method} (попытка {attempt+1}/{retries})")
-            time.sleep(RETRY_DELAY)
-        except requests.exceptions.ConnectionError:
-            last_exc = BitrixError(f"Ошибка соединения с Bitrix ({method})")
-            log.warning(f"Connection error для {method} (попытка {attempt+1}/{retries})")
-            time.sleep(RETRY_DELAY)
-        except requests.exceptions.RequestException as e:
-            last_exc = BitrixError(f"HTTP ошибка Bitrix ({method}): {e}")
-            log.warning(f"HTTP ошибка для {method} (попытка {attempt+1}/{retries}): {e}")
-            time.sleep(RETRY_DELAY)
         except Exception as e:
-            last_exc = BitrixError(f"Неожиданная ошибка Bitrix ({method}): {e}")
-            log.error(f"Неожиданная ошибка для {method}: {e}")
-            time.sleep(RETRY_DELAY)
+            last_exc = e
+            log.warning(f"Попытка {attempt}/{MAX_RETRIES} к Gemini провалена: {e}")
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY * attempt)
+            else:
+                log.exception(f"Не удалось вызвать Gemini: {last_exc}")
+                raise last_exc
 
-    raise last_exc
-
-
-def get_lead_fields() -> Dict[str, Any]:
-    """Получение описания полей лида"""
-    return _make_bitrix_request('crm.lead.fields.json', {})
-
-
-def get_lead_info(lead_id: str) -> Dict[str, Any]:
-    """Получение информации о лиде"""
-    if not lead_id or not lead_id.strip():
-        raise BitrixError("ID лида пустой")
-
-    data = {
-        'id': str(lead_id).strip()
-    }
-    return _make_bitrix_request('crm.lead.get.json', data)
+    # На всякий случай
+    raise last_exc or RuntimeError("Неизвестная ошибка при вызове Gemini")
 
 
-def update_lead_comment(lead_id: str, comment: str) -> Dict[str, Any]:
-    """Обновление комментария лида"""
-    if not lead_id or not lead_id.strip():
-        raise BitrixError("ID лида пустой")
-    if not comment or not comment.strip():
-        raise BitrixError("Комментарий пустой")
+# ---- Основные публичные функции API ----
 
-    # Обрезаем комментарий если слишком длинный
-    if len(comment) > MAX_COMMENT_LENGTH:
-        comment = comment[:MAX_COMMENT_LENGTH] + "\n\n[Комментарий обрезан из-за ограничений длины]"
-        log.warning(f"Комментарий для лида {lead_id} обрезан до {MAX_COMMENT_LENGTH} символов")
-
-    data = {
-        'id': str(lead_id).strip(),
-        'fields': {
-            'COMMENTS': comment.strip()
-        },
-        'params': {
-            'REGISTER_SONET_EVENT': 'Y'
-        }
-    }
-    return _make_bitrix_request('crm.lead.update.json', data)
-
-
-def create_task(lead_id: str, title: str, description: str, responsible_id: str = None, deadline: Optional[str] = None) -> Dict[str, Any]:
-    """Создание задачи в Bitrix24, связанной с лидом"""
-    if not lead_id or not lead_id.strip():
-        raise BitrixError("ID лида пустой")
-
-    if not title or not title.strip():
-        raise BitrixError("Заголовок задачи пустой")
-
-    if not responsible_id:
-        responsible_id = BITRIX_RESPONSIBLE_ID
-
-    # Рассчитываем дедлайн
-    deadline_date = deadline or (datetime.now() + timedelta(days=BITRIX_TASK_DEADLINE_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
-
-    # Обрезаем описание если слишком длинное
-    max_desc_length = 5000
-    if len(description) > max_desc_length:
-        description = description[:max_desc_length] + "\n\n[Описание обрезано]"
-
-    data = {
-        'fields': {
-            'TITLE': f"[Лид {lead_id}] {title}",
-            'DESCRIPTION': description,
-            'RESPONSIBLE_ID': responsible_id,
-            'CREATED_BY': BITRIX_CREATED_BY_ID,
-            'DEADLINE': deadline_date,
-            'UF_CRM_TASK': [f'L_{lead_id.strip()}'],  # Связываем с лидом
-            'PRIORITY': '1',  # Высокий приоритет
-            'GROUP_ID': '0'   # Общая группа
-        }
-    }
-
-    log.info(f"Создание задачи для лида {lead_id}: {title}")
-    return _make_bitrix_request('tasks.task.add.json', data)
-
-
-# ---- Дополнительные функции-обёртки, ожидаемые main.py ----
-
-def test_bitrix_connection() -> bool:
-    """Пассивный тест подключения: пытается получить описание полей лида"""
+def analyze_transcript_structured(transcript: str) -> Dict[str, Any]:
+    """
+    Основная функция для анализа транскрипта.
+    Возвращает нормализованный словарь с ожидаемыми полями.
+    """
     try:
-        if not BITRIX_WEBHOOK_URL:
-            log.warning("BITRIX_WEBHOOK_URL не задан — тест подключения пропущен")
-            return False
-        resp = get_lead_fields()
-        # Если ответ содержит 'result' или структуру полей — считаем OK
-        if isinstance(resp, dict):
-            return True
-        return False
+        if not transcript or not transcript.strip():
+            return {"analysis": None}
+
+        safe_txt = sanitize_transcript_for_safety(transcript)
+        prompt = _build_analysis_prompt(safe_txt)
+
+        raw = _call_gemini(prompt, model=MODEL_NAME, max_tokens=1200)
+        if not raw:
+            log.warning("Gemini вернул пустой ответ")
+            return {"analysis": "Пустой ответ от модели"}
+
+        parsed = extract_json_from_text(raw)
+        if parsed is None:
+            # Если JSON не найден — попытка взять начало ответа как анализ
+            fallback_analysis = raw.strip()
+            if len(fallback_analysis) > 4000:
+                fallback_analysis = fallback_analysis[:4000] + "..."
+            result = {
+                "analysis": fallback_analysis,
+                "wow_effect": None,
+                "product": None,
+                "task_formulation": None,
+                "ad_budget": None,
+                "closing_comment": None,
+                "is_lpr": None,
+                "meeting_scheduled": None,
+                "meeting_done": None,
+                "client_type_text": None,
+                "bad_reason_text": None,
+                "kp_done_text": None,
+                "lpr_confirmed_text": None,
+                "source_text": None,
+                "our_product_text": None,
+                "meeting_date": None,
+                "planned_meeting_date": None,
+                "meeting_responsible_id": None
+            }
+            return result
+
+        validated = validate_gemini_output(parsed)
+
+        # Если analysis не заполнён в parsed — попытка извлечь текстовую часть из raw
+        if not validated.get("analysis"):
+            # Найти всё до JSON (если JSON найден внутри) — это может быть текстовый анализ
+            json_pos = None
+            try:
+                json_pos = raw.find(json.dumps(parsed))
+            except Exception:
+                json_pos = None
+
+            if json_pos and json_pos > 0:
+                possible_analysis = raw[:json_pos].strip()
+            else:
+                possible_analysis = raw.strip()
+
+            validated["analysis"] = possible_analysis if possible_analysis else None
+
+        return validated
+
     except Exception as e:
-        log.exception(f"Ошибка теста Bitrix: {e}")
-        return False
+        log.exception("Ошибка при анализе транскрипта: %s", e)
+        return {"analysis": f"Ошибка при анализе: {e}"}
 
 
-def get_bitrix_info() -> Dict[str, Any]:
-    """Возвращает информацию о конфигурации Bitrix"""
+def create_analysis_summary(data: Dict[str, Any]) -> str:
+    """
+    Форматирует короткое резюме анализа для отправки в чат.
+    """
+    if not data:
+        return "Анализ недоступен"
+
+    lines = []
+    analysis = data.get("analysis") or "Нет анализа"
+
+    lines.append("✅ Анализ встречи выполнен")
+    if data.get("is_lpr") is True:
+        lines.append("• ЛПР: найден ✅")
+    elif data.get("is_lpr") is False:
+        lines.append("• ЛПР: не найден ❌")
+    else:
+        lines.append("• ЛПР: не указано")
+
+    if data.get("meeting_done") is True:
+        lines.append("• Встреча: проведена ✅")
+    elif data.get("meeting_scheduled") is True:
+        lines.append("• Встреча: запланирована ⏳")
+    else:
+        lines.append("• Встреча: не указано")
+
+    kp = data.get("kp_done_text")
+    if kp:
+        lines.append(f"• КП: {kp}")
+
+    budget = data.get("ad_budget")
+    if budget:
+        lines.append(f"• Бюджет: {budget}")
+
+    product = data.get("product")
+    if product:
+        prod_short = str(product)[:200] + ("..." if len(str(product)) > 200 else "")
+        lines.append(f"• Продукт клиента: {prod_short}")
+
+    lines.append("")
+    lines.append("📝 Краткий анализ:")
+    lines.append(str(analysis)[:2000])
+
+    return "\n".join(lines)
+
+
+def get_gemini_info() -> Dict[str, Any]:
+    """
+    Возвращает информацию о настройках и тестовом ответе Gemini.
+    """
     info = {
-        'webhook_configured': bool(BITRIX_WEBHOOK_URL),
-        'connection_test': False,
-        'available_fields': 0,
-        'custom_fields': 0
+        "model_name": MODEL_NAME,
+        "api_key_present": bool(GEMINI_API_KEY),
+        "connection_test": False,
+        "max_retries": MAX_RETRIES
     }
     try:
-        if not BITRIX_WEBHOOK_URL:
-            return info
-        fields = get_lead_fields()
-        if isinstance(fields, dict) and 'result' in fields:
-            items = fields.get('result', {})
-            info['available_fields'] = len(items)
-            # custom fields — простой подсчёт по UF_CRM_ ключам
-            info['custom_fields'] = len([k for k in items.keys() if k.startswith('UF_')])
-            info['connection_test'] = True
+        # Пассивный тест: короткий вызов
+        test_prompt = "Короткий ответ: ok"
+        resp = _call_gemini(test_prompt, model=MODEL_NAME, max_tokens=16)
+        if resp and "ok" in resp.lower():
+            info["connection_test"] = True
         else:
-            info['connection_test'] = True  # получили ответ — пусть будет true
-    except Exception:
-        log.exception("Не удалось получить поля лида из Bitrix")
-        info['connection_test'] = False
-
+            # если получили хоть какой-то ответ, тоже считаем соединение рабочим
+            info["connection_test"] = bool(resp)
+    except Exception as e:
+        log.debug(f"get_gemini_info test failed: {e}")
+        info["connection_test"] = False
     return info
 
 
-def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict[str, Any]:
+def test_gemini_connection() -> bool:
     """
-    Удобная обёртка для обновления лида: добавляет комментарий с анализом и обновляет кастомные поля.
-    gemini_data — структура, возвращаемая из gemini_client.analyze_transcript_structured (словарь).
+    Утилита для быстрого теста доступности Gemini.
     """
-    if not lead_id:
-        raise BitrixError("lead_id обязателен")
-
-    result = {'updated': False, 'detail': None, 'task_created': False, 'task_id': None}
-
     try:
-        # 1) Обновим COMMENTS (если есть analysis)
-        analysis = gemini_data.get('analysis')
-        closing_comment = gemini_data.get('closing_comment')
-        if analysis or closing_comment:
-            try:
-                # Дополняем основной анализ завершающим комментарием, если он есть
-                comment_parts: List[str] = []
-                if analysis:
-                    comment_parts.append(str(analysis))
-                if closing_comment:
-                    comment_parts.append("\n\nИтог/закрывающий комментарий:\n" + str(closing_comment))
-
-                update_resp = update_lead_comment(lead_id, "\n".join(comment_parts).strip())
-                log.debug(f"Обновлен комментарий лида {lead_id}")
-            except Exception as e:
-                log.exception(f"Не удалось обновить комментарий лид {lead_id}: {e}")
-
-        # 2) Попробуем собрать fields для обновления (простое поведение — маппинг известных ключей)
-        fields_payload = {}
-        # Перечисляем возможные поля, которые могут присутствовать и соответствуют UF_*
-        mapping = {
-            'wow_effect': 'UF_CRM_1754665062',
-            'product': 'UF_CRM_1579102568584',
-            'task_formulation': 'UF_CRM_1592909799043',
-            'ad_budget': 'UF_CRM_1592910027',
-            'is_lpr': 'UF_CRM_1754651857',
-            'meeting_scheduled': 'UF_CRM_1754651891',
-            'meeting_done': 'UF_CRM_1754651937',
-            'client_type_text': 'UF_CRM_1547738289',
-            'bad_reason_text': 'UF_CRM_1555492157080',
-            'kp_done_text': 'UF_CRM_1754652099',
-            'lpr_confirmed_text': 'UF_CRM_1755007163632',
-            'source_text': 'UF_CRM_1648714327',
-            'our_product_text': 'UF_CRM_1741622365',
-        }
-
-        for k, uf in mapping.items():
-            if k in gemini_data and gemini_data.get(k) is not None:
-                val = gemini_data.get(k)
-                # Bool -> '1'/'0' if necessary for Bitrix
-                if isinstance(val, bool):
-                    fields_payload[uf] = '1' if val else '0'
-                else:
-                    fields_payload[uf] = str(val)
-
-        if fields_payload:
-            data = {
-                'id': str(lead_id).strip(),
-                'fields': fields_payload,
-                'params': {
-                    'REGISTER_SONET_EVENT': 'Y'
-                }
-            }
-            try:
-                resp = _make_bitrix_request('crm.lead.update.json', data)
-                result['updated'] = True
-                result['detail'] = resp
-                log.info(f"Lead {lead_id} updated with fields: {list(fields_payload.keys())}")
-            except Exception as e:
-                log.exception(f"Ошибка при обновлении полей лида {lead_id}: {e}")
-
-        # 3) Логика создания задач по результатам анализа
-        try:
-            task_responsible = str(gemini_data.get('meeting_responsible_id') or '').strip() or None
-
-            def _format_deadline(dt_str: Optional[str]) -> Optional[str]:
-                if not dt_str:
-                    return None
-                try:
-                    # Поддержка форматов YYYY-MM-DD и YYYY-MM-DD HH:MM:SS
-                    if len(dt_str.strip()) == 10:
-                        parsed = datetime.strptime(dt_str.strip(), '%Y-%m-%d')
-                        return parsed.strftime('%Y-%m-%d 18:00:00')
-                    parsed = datetime.strptime(dt_str.strip(), '%Y-%m-%d %H:%M:%S')
-                    return parsed.strftime('%Y-%m-%d %H:%M:%S')
-                except Exception:
-                    return None
-
-            meeting_scheduled = gemini_data.get('meeting_scheduled') is True
-            meeting_done = gemini_data.get('meeting_done') is True
-            is_lpr = gemini_data.get('is_lpr') is True
-            planned_meeting_date = gemini_data.get('planned_meeting_date')
-
-            # Если встреча запланирована и есть дата — создаём задачу с соответствующим дедлайном
-            if meeting_scheduled and not meeting_done:
-                deadline = _format_deadline(planned_meeting_date)
-                title = 'Провести запланированную встречу'
-                descr_parts: List[str] = [
-                    'Автосоздано ботом по итогам анализа встречи.',
-                ]
-                if planned_meeting_date:
-                    descr_parts.append(f"Плановая дата: {planned_meeting_date}")
-                if closing_comment:
-                    descr_parts.append(f"Комментарий: {closing_comment}")
-                description = "\n".join(descr_parts)
-
-                # Если есть явный дедлайн — временно изменим глобальную настройку через локальную переменную
-                if deadline:
-                    try:
-                        task_resp = create_task(
-                            lead_id=str(lead_id),
-                            title=title,
-                            description=description,
-                            responsible_id=task_responsible or None,
-                            deadline=deadline
-                        )
-                        result['task_created'] = True
-                        # получить id задачи
-                        if isinstance(task_resp, dict):
-                            # возможные варианты: {'result': {'task': {'id': 123}}} или {'result': {'task': {'id': '123'}}}
-                            task_obj = task_resp.get('result') or {}
-                            if isinstance(task_obj, dict):
-                                task_entity = task_obj.get('task') or task_obj
-                                if isinstance(task_entity, dict):
-                                    task_id = task_entity.get('id') or task_entity.get('task', {}).get('id')
-                                    result['task_id'] = str(task_id) if task_id else None
-                    except Exception as e:
-                        log.exception(f"Не удалось создать задачу для лида {lead_id}: {e}")
-
-            # Если ЛПР найден, но встреча не назначена — создаём задачу назначить встречу
-            elif is_lpr and not meeting_scheduled and not meeting_done:
-                title = 'Назначить встречу с ЛПР'
-                description = 'Автозадача: назначить встречу с ЛПР по итогам анализа. '
-                if closing_comment:
-                    description += f"\nКомментарий: {closing_comment}"
-                try:
-                    task_resp = create_task(
-                        lead_id=str(lead_id),
-                        title=title,
-                        description=description,
-                        responsible_id=task_responsible or None
-                    )
-                    result['task_created'] = True
-                    if isinstance(task_resp, dict):
-                        task_obj = task_resp.get('result') or {}
-                        if isinstance(task_obj, dict):
-                            task_entity = task_obj.get('task') or task_obj
-                            if isinstance(task_entity, dict):
-                                task_id = task_entity.get('id') or task_entity.get('task', {}).get('id')
-                                result['task_id'] = str(task_id) if task_id else None
-                except Exception as e:
-                    log.exception(f"Не удалось создать задачу 'Назначить встречу' для лида {lead_id}: {e}")
-        except Exception as e:
-            log.exception(f"Ошибка логики создания задач для лида {lead_id}: {e}")
-
-    except Exception as e:
-        log.exception(f"Ошибка в update_lead_comprehensive: {e}")
-        raise
-
-    return result
+        return bool(get_gemini_info().get("connection_test"))
+    except Exception:
+        return False
