@@ -371,6 +371,12 @@ def _call_gemini(prompt: str, model: Optional[str] = None, max_tokens: int = MAX
                 }
                 headers = {"Content-Type": "application/json"}
                 r = requests.post(url, headers=headers, json=payload, timeout=30)
+                if r.status_code == 429:
+                    # Рейт-лимит — подождём и повторим попытку
+                    wait_s = RETRY_DELAY * attempt
+                    log.warning(f"Gemini REST 429 Too Many Requests — ожидание {wait_s}s перед повтором")
+                    time.sleep(wait_s)
+                    raise requests.exceptions.HTTPError("429 Too Many Requests", response=r)
                 r.raise_for_status()
                 data = r.json()
                 # В v1beta ответ обычно: candidates[0].content.parts[*].text
@@ -392,7 +398,7 @@ def _call_gemini(prompt: str, model: Optional[str] = None, max_tokens: int = MAX
                 return r.text
             except Exception as e:
                 last_exc = e
-                raise RuntimeError("Нет подходящего метода вызова Gemini в установленной версии google.generativeai")
+                raise RuntimeError("Ошибка вызова Gemini REST API")
 
         except Exception as e:
             last_exc = e
