@@ -44,6 +44,33 @@ def send_message(chat_id: int, text: str) -> None:
         log.error(f"Ошибка HTTP при отправке сообщения в чат {chat_id}: {e}")
 
 
+def _download_telegram_file(file_id: str) -> bytes:
+    """Скачивает файл из Telegram по file_id и возвращает байты."""
+    try:
+        # 1) Получаем путь к файлу
+        resp = requests.get(
+            f"{BASE_URL}/getFile",
+            params={"file_id": file_id},
+            timeout=15
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if not isinstance(data, dict) or not data.get("ok"):
+            raise RuntimeError("getFile вернул некорректный ответ")
+        file_path = data.get("result", {}).get("file_path")
+        if not file_path:
+            raise RuntimeError("file_path не найден в ответе getFile")
+
+        # 2) Скачиваем сам файл
+        file_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
+        f = requests.get(file_url, timeout=30)
+        f.raise_for_status()
+        return f.content
+    except Exception as e:
+        log.error(f"Не удалось скачать файл {file_id}: {e}")
+        raise
+
+
 # --- Маршруты ---
 @app.route("/", methods=["GET"])
 def index():
@@ -59,7 +86,8 @@ def webhook():
         return {"ok": True}
 
     chat_id = data["message"]["chat"]["id"]
-    text = data["message"].get("text", "").strip()
+    msg = data["message"]
+    text = msg.get("text", "").strip()
 
     # Инициализация состояния для нового пользователя
     if chat_id not in user_states:
@@ -103,7 +131,44 @@ def webhook():
                 log.error(f"Ошибка при обновлении лида {lead_id}: {e}")
             user_states[chat_id] = {"state": "idle", "last_analysis": None}
         elif not text:
-            send_message(chat_id, "❗ Отправь текст для анализа 🚀")
+            # Проверяем документ .txt
+            doc = msg.get("document")
+            if doc and isinstance(doc, dict):
+                file_name = doc.get("file_name", "")
+                if file_name.lower().endswith(".txt"):
+                    send_message(chat_id, "📥 Получил файл, загружаю и анализирую...")
+                    try:
+                        file_id = doc.get("file_id")
+                        raw = _download_telegram_file(file_id)
+                        # Пытаемся определить кодировку и преобразовать в текст
+                        text_data = None
+                        for enc in ("utf-8", "utf-16", "cp1251", "latin-1"):
+                            try:
+                                text_data = raw.decode(enc)
+                                break
+                            except Exception:
+                                continue
+                        if not text_data:
+                            raise RuntimeError("Не удалось декодировать файл")
+
+                        send_message(chat_id, "🔎 Анализирую встречу из файла, подожди немного...")
+                        analysis = analyze_transcript_structured(text_data)
+                        summary = create_analysis_summary(analysis)
+
+                        user_states[chat_id] = {
+                            "state": "awaiting_lead_id",
+                            "last_analysis": analysis
+                        }
+
+                        send_message(chat_id, summary)
+                        send_message(chat_id, "Теперь введи ID лида, чтобы обновить его в Bitrix ⬇️")
+                        return {"ok": True}
+                    except Exception as e:
+                        log.error(f"Ошибка обработки файла: {e}")
+                        send_message(chat_id, f"❌ Не удалось обработать файл: {e}")
+                        return {"ok": True}
+
+            send_message(chat_id, "❗ Отправь текст для анализа или .txt файл с транскриптом 🚀")
         else:
             send_message(chat_id, "🔎 Анализирую встречу, подожди немного...")
             analysis = analyze_transcript_structured(text)
