@@ -108,7 +108,11 @@ def webhook():
 
             try:
                 result = update_lead_comprehensive(lead_id, analysis)
-                send_message(chat_id, f"✅ Лид {lead_id} успешно обновлён в Bitrix")
+                msg = f"✅ Лид {lead_id} успешно обновлён в Bitrix"
+                if isinstance(result, dict) and result.get('task_created'):
+                    task_id = result.get('task_id') or '—'
+                    msg += f"\n🗓 Создана задача, ID: {task_id}"
+                send_message(chat_id, msg)
                 log.info(f"Lead {lead_id} updated: {result}")
             except Exception as e:
                 send_message(chat_id, f"❌ Ошибка обновления лида {lead_id}: {e}")
