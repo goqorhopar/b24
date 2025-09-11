@@ -20,6 +20,7 @@ RETRY_DELAY = float(os.getenv('RETRY_DELAY', '2'))
 MAX_COMMENT_LENGTH = int(os.getenv('MAX_COMMENT_LENGTH', '8000'))
 
 _BITRIX_FIELDS_CACHE: Optional[Dict[str, Any]] = None
+_BITRIX_STATUSES_CACHE: Dict[str, List[Dict[str, Any]]] = {}
 
 
 class BitrixError(Exception):
@@ -81,6 +82,125 @@ def _make_bitrix_request(method: str, data: Dict[str, Any], retries: int = MAX_R
 def get_lead_fields() -> Dict[str, Any]:
     """Получение описания полей лида"""
     return _make_bitrix_request('crm.lead.fields.json', {})
+
+
+def _get_statuses(status_type: str, force_refresh: bool = False) -> List[Dict[str, Any]]:
+    """Кэшированный список статусов по STATUS TYPE (например, SOURCE/STATUS)."""
+    key = status_type.upper().strip()
+    if not key:
+        return []
+    if force_refresh or key not in _BITRIX_STATUSES_CACHE:
+        try:
+            resp = _make_bitrix_request('crm.status.list.json', {
+                'filter': {'ENTITY_ID': key}
+            })
+            items = []
+            if isinstance(resp, dict):
+                items = resp.get('result') or []
+            if not isinstance(items, list):
+                items = []
+            _BITRIX_STATUSES_CACHE[key] = items
+        except Exception as e:
+            log.warning(f"Не удалось получить статусы для {key}: {e}")
+            _BITRIX_STATUSES_CACHE[key] = []
+    return _BITRIX_STATUSES_CACHE.get(key, [])
+
+
+def _crm_status_id_by_label(status_type: str, label_value: Any) -> Optional[str]:
+    if label_value is None:
+        return None
+    try:
+        if isinstance(label_value, (int, float)):
+            return str(int(label_value))
+        if isinstance(label_value, str) and label_value.strip().isdigit():
+            return label_value.strip()
+    except Exception:
+        pass
+    options = _get_statuses(status_type)
+    text = str(label_value).strip().lower()
+    # точное
+    for it in options:
+        if isinstance(it, dict) and str(it.get('NAME', '')).strip().lower() == text:
+            return str(it.get('STATUS_ID')) if it.get('STATUS_ID') is not None else None
+    # частичное
+    for it in options:
+        name = str(it.get('NAME', '')).strip().lower()
+        if text.startswith(name) or name.startswith(text) or (text in name) or (name in text):
+            return str(it.get('STATUS_ID')) if it.get('STATUS_ID') is not None else None
+    return None
+
+
+def _extract_entities_from_analysis(text: Optional[str]) -> Dict[str, Optional[str]]:
+    """Грубая эвристика извлечения компании, имени и заголовка из текста анализа."""
+    if not text:
+        return {
+            'company_title': None,
+            'client_name': None,
+            'client_last_name': None,
+            'lead_title': None,
+            'source_description': None
+        }
+    try:
+        s = str(text)
+        result: Dict[str, Optional[str]] = {
+            'company_title': None,
+            'client_name': None,
+            'client_last_name': None,
+            'lead_title': None,
+            'source_description': None
+        }
+
+        # 1) Компания
+        # Ищем конструкции с ООО/ИП/АО/ПАО/ЗАО/ОАО/Лтд/LLC и в кавычках
+        patterns = [
+            r'(ООО\s+«([^»]+)»)',
+            r'(ООО\s+"([^"]+)")',
+            r'(ИП\s+([А-ЯЁA-Z][^,\n]+))',
+            r'((?:АО|ПАО|ОАО|ЗАО)\s+«([^»]+)»)',
+            r'((?:АО|ПАО|ОАО|ЗАО)\s+"([^"]+)")',
+            r'((?:LLC|Ltd|LTD)\s+([A-Za-z0-9\-\s\.&]+))',
+            r'(компания\s+«([^»]+)»)',
+            r'(компания\s+"([^"]+)")',
+        ]
+        import re
+        for p in patterns:
+            m = re.search(p, s)
+            if m:
+                # название может быть либо в группе 2 либо 1 без приставки
+                name = None
+                if m.lastindex and m.lastindex >= 2 and m.group(2):
+                    name = m.group(2)
+                else:
+                    name = m.group(0)
+                if name:
+                    result['company_title'] = name.strip()[:255]
+                    break
+
+        # 2) Имя Фамилия (русские буквы)
+        m_name = re.search(r'\b([А-ЯЁ][а-яё]+)\s+([А-ЯЁ][а-яё]+)\b', s)
+        if m_name:
+            result['client_name'] = m_name.group(1)[:100]
+            result['client_last_name'] = m_name.group(2)[:100]
+
+        # 3) lead_title — первая осмысленная строка/предложение
+        first_sentence = re.split(r'[\.!?\n]', s, maxsplit=1)[0].strip()
+        if first_sentence:
+            result['lead_title'] = (first_sentence[:80] + '...') if len(first_sentence) > 83 else first_sentence
+
+        # 4) source_description — интересная фраза об источнике, если встретится
+        m_src = re.search(r'(узн[ао]ли|источник|рекомендац)[^\n\.!?]{0,120}', s, flags=re.IGNORECASE)
+        if m_src:
+            result['source_description'] = m_src.group(0)[:255]
+
+        return result
+    except Exception:
+        return {
+            'company_title': None,
+            'client_name': None,
+            'client_last_name': None,
+            'lead_title': None,
+            'source_description': None
+        }
 
 
 def _get_fields_meta(force_refresh: bool = False) -> Dict[str, Any]:
@@ -445,6 +565,51 @@ def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict
                         
                 except Exception as e:
                     log.warning(f"Пропущено поле {uf} ({k}) из-за ошибки преобразования: {e}")
+
+        # 2.1) Заполним стандартные поля CRM лида, если пришли
+        extracted = _extract_entities_from_analysis(analysis)
+        # TITLE
+        lead_title = gemini_data.get('lead_title') or extracted.get('lead_title')
+        if not lead_title:
+            # Автогенерация: по задаче или продукту
+            base_title = gemini_data.get('task_formulation') or gemini_data.get('product') or gemini_data.get('analysis')
+            if base_title:
+                s = str(base_title).strip()
+                lead_title = (s[:80] + '...') if len(s) > 83 else s
+        if lead_title:
+            fields_payload['TITLE'] = str(lead_title)
+
+        # NAME, LAST_NAME, COMPANY_TITLE
+        if gemini_data.get('client_name') or extracted.get('client_name'):
+            fields_payload['NAME'] = str(gemini_data.get('client_name') or extracted.get('client_name')).strip()[:100]
+        if gemini_data.get('client_last_name') or extracted.get('client_last_name'):
+            fields_payload['LAST_NAME'] = str(gemini_data.get('client_last_name') or extracted.get('client_last_name')).strip()[:100]
+        if gemini_data.get('company_title') or extracted.get('company_title'):
+            fields_payload['COMPANY_TITLE'] = str(gemini_data.get('company_title') or extracted.get('company_title')).strip()[:255]
+
+        # SOURCE_ID (crm_status: SOURCE)
+        # Приоритет: явный source_id_code > source_id_text > source_text (UF) fallback
+        source_id_code = gemini_data.get('source_id_code')
+        source_id_text = gemini_data.get('source_id_text') or gemini_data.get('source_text')
+        resolved_source = None
+        if source_id_code:
+            resolved_source = _crm_status_id_by_label('SOURCE', source_id_code)
+        if not resolved_source and source_id_text:
+            resolved_source = _crm_status_id_by_label('SOURCE', source_id_text)
+        if resolved_source:
+            fields_payload['SOURCE_ID'] = resolved_source
+
+        # SOURCE_DESCRIPTION
+        if gemini_data.get('source_description') or extracted.get('source_description'):
+            fields_payload['SOURCE_DESCRIPTION'] = str(gemini_data.get('source_description') or extracted.get('source_description'))[:255]
+
+        # ASSIGNED_BY_ID (если пришёл числом)
+        assigned_raw = gemini_data.get('assigned_by_id')
+        if assigned_raw is not None:
+            try:
+                fields_payload['ASSIGNED_BY_ID'] = int(str(assigned_raw).strip())
+            except Exception:
+                pass
 
         if fields_payload:
             data = {
