@@ -4,6 +4,7 @@ import logging
 import time
 from typing import Optional, Dict, Any, Tuple, List
 from urllib.parse import urljoin
+from datetime import datetime, timedelta
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +24,9 @@ class BitrixError(Exception):
 def _make_bitrix_request(method: str, data: Dict[str, Any], retries: int = MAX_RETRIES) -> Dict[str, Any]:
     if not BITRIX_WEBHOOK_URL:
         raise BitrixError("BITRIX_WEBHOOK_URL не настроен")
+    
     url = urljoin(BITRIX_WEBHOOK_URL.rstrip('/') + '/', method)
+    log.info(f"Bitrix request to {method}: {data}")
 
     last_exc = None
     for attempt in range(retries):
@@ -34,8 +37,14 @@ def _make_bitrix_request(method: str, data: Dict[str, Any], retries: int = MAX_R
             )
             response.raise_for_status()
             result = response.json()
+            
+            log.info(f"Bitrix response: {result}")
+            
             if 'error' in result:
-                raise BitrixError(result.get('error_description', result.get('error', 'Ошибка Bitrix API')))
+                error_msg = result.get('error_description', result.get('error', 'Ошибка Bitrix API'))
+                log.error(f"Bitrix API error: {error_msg}")
+                raise BitrixError(error_msg)
+                
             return result
         except requests.exceptions.RequestException as e:
             last_exc = e
@@ -45,6 +54,7 @@ def _make_bitrix_request(method: str, data: Dict[str, Any], retries: int = MAX_R
             last_exc = e
             log.error(f"Неожиданная ошибка Bitrix: {e}")
             time.sleep(RETRY_DELAY)
+            
     raise BitrixError(f"Не удалось выполнить запрос к Bitrix: {last_exc}")
 
 def update_lead_comment(lead_id: str, comment: str) -> Dict[str, Any]:
@@ -79,6 +89,32 @@ def get_lead_fields() -> Dict[str, Any]:
     """
     return _make_bitrix_request('crm.lead.fields.json', {})
 
+def create_task(lead_id: str, title: str, description: str, responsible_id: str = None) -> Dict[str, Any]:
+    """
+    Создает задачу в Bitrix24, связанную с лидом
+    """
+    if not lead_id or not lead_id.strip():
+        raise BitrixError("ID лида пустой")
+    
+    if not responsible_id:
+        responsible_id = BITRIX_RESPONSIBLE_ID
+    
+    # Рассчитываем дедлайн
+    deadline_date = (datetime.now() + timedelta(days=BITRIX_TASK_DEADLINE_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
+    
+    data = {
+        'fields': {
+            'TITLE': f"[Лид {lead_id}] {title}",
+            'DESCRIPTION': description,
+            'RESPONSIBLE_ID': responsible_id,
+            'CREATED_BY': BITRIX_CREATED_BY_ID,
+            'DEADLINE': deadline_date,
+            'UF_CRM_TASK': ['L_' + lead_id.strip()]  # Связываем с лидом
+        }
+    }
+    
+    return _make_bitrix_request('tasks.task.add.json', data)
+
 def _map_bool(value: Any) -> str:
     return '1' if bool(value) else '0'
 
@@ -107,19 +143,6 @@ def build_fields_from_gemini(gemini: Dict[str, Any], fields_meta: Dict[str, Any]
     """
     Собирает словарь fields для crm.lead.update на основе структурированных данных Gemini
     и меты полей Bitrix (динамический поиск enum ID).
-    Предполагаемые поля в Bitrix:
-      - COMMENTS (string)
-      - UF_CRM_1754665062 WOW-эффект (string)
-      - UF_CRM_1547738289 ТИП КЛИЕНТА (enum)
-      - UF_CRM_1555492157080 Почему некачественный (enum)
-      - UF_CRM_1579102568584 Что продает (string)
-      - UF_CRM_1592909799043 Как сформулирована задача (string)
-      - UF_CRM_1592910027 Рекламный бюджет (string)
-      - UF_CRM_1754651857 Вышли на ЛПР? (boolean)
-      - UF_CRM_1754651891 Назначили встречу? (boolean)
-      - UF_CRM_1754651937 Провели встречу? (boolean)
-      - UF_CRM_1754652099 Сделали КП? (enum)
-      - UF_CRM_1755007163632 ЛПР подтвержден? (enum)
     """
     result = {}
 
@@ -129,15 +152,22 @@ def build_fields_from_gemini(gemini: Dict[str, Any], fields_meta: Dict[str, Any]
         result['COMMENTS'] = analysis[:MAX_COMMENT_LENGTH]
 
     # 2) Простые строки
-    result['UF_CRM_1754665062'] = str(gemini.get('wow_effect') or '').strip()                        # WOW
-    result['UF_CRM_1579102568584'] = str(gemini.get('product') or '').strip()                        # Что продает
-    result['UF_CRM_1592909799043'] = str(gemini.get('task_formulation') or '').strip()               # Как сформулирована задача
-    result['UF_CRM_1592910027'] = str(gemini.get('ad_budget') or '').strip()                         # Рекламный бюджет
+    if 'wow_effect' in gemini:
+        result['UF_CRM_1754665062'] = str(gemini.get('wow_effect') or '').strip()  # WOW
+    if 'product' in gemini:
+        result['UF_CRM_1579102568584'] = str(gemini.get('product') or '').strip()  # Что продает
+    if 'task_formulation' in gemini:
+        result['UF_CRM_1592909799043'] = str(gemini.get('task_formulation') or '').strip()  # Как сформулирована задача
+    if 'ad_budget' in gemini:
+        result['UF_CRM_1592910027'] = str(gemini.get('ad_budget') or '').strip()  # Рекламный бюджет
 
     # 3) Boolean
-    result['UF_CRM_1754651857'] = _map_bool(gemini.get('is_lpr'))                                    # Вышли на ЛПР
-    result['UF_CRM_1754651891'] = _map_bool(gemini.get('meeting_scheduled'))                         # Назначили встречу
-    result['UF_CRM_1754651937'] = _map_bool(gemini.get('meeting_done'))                              # Провели встречу
+    if 'is_lpr' in gemini:
+        result['UF_CRM_1754651857'] = _map_bool(gemini.get('is_lpr'))  # Вышли на ЛПР
+    if 'meeting_scheduled' in gemini:
+        result['UF_CRM_1754651891'] = _map_bool(gemini.get('meeting_scheduled'))  # Назначили встречу
+    if 'meeting_done' in gemini:
+        result['UF_CRM_1754651937'] = _map_bool(gemini.get('meeting_done'))  # Провели встречу
 
     # 4) Enums — ищем ID по тексту
     # ТИП КЛИЕНТА
@@ -149,6 +179,8 @@ def build_fields_from_gemini(gemini: Dict[str, Any], fields_meta: Dict[str, Any]
         enum_id = _enum_find_id(items, client_type_text)
         if enum_id:
             result['UF_CRM_1547738289'] = enum_id
+        else:
+            log.warning(f"Не найден ID для client_type_text: {client_type_text}")
 
     # Почему некачественный
     bad_reason_text = gemini.get('bad_reason_text')
@@ -159,6 +191,8 @@ def build_fields_from_gemini(gemini: Dict[str, Any], fields_meta: Dict[str, Any]
         enum_id = _enum_find_id(items, bad_reason_text)
         if enum_id:
             result['UF_CRM_1555492157080'] = enum_id
+        else:
+            log.warning(f"Не найден ID для bad_reason_text: {bad_reason_text}")
 
     # Сделали КП?
     kp_done_text = gemini.get('kp_done_text')
@@ -169,6 +203,8 @@ def build_fields_from_gemini(gemini: Dict[str, Any], fields_meta: Dict[str, Any]
         enum_id = _enum_find_id(items, kp_done_text)
         if enum_id:
             result['UF_CRM_1754652099'] = enum_id
+        else:
+            log.warning(f"Не найден ID для kp_done_text: {kp_done_text}")
 
     # ЛПР подтвержден?
     lpr_confirmed_text = gemini.get('lpr_confirmed_text')
@@ -179,6 +215,8 @@ def build_fields_from_gemini(gemini: Dict[str, Any], fields_meta: Dict[str, Any]
         enum_id = _enum_find_id(items, lpr_confirmed_text)
         if enum_id:
             result['UF_CRM_1755007163632'] = enum_id
+        else:
+            log.warning(f"Не найден ID для lpr_confirmed_text: {lpr_confirmed_text}")
 
     return result
 
@@ -190,6 +228,7 @@ def update_lead_with_checklist(lead_id: str, gemini_struct: Dict[str, Any]) -> D
     fields_meta = get_lead_fields()
     # 2) Сборка полей
     fields = build_fields_from_gemini(gemini_struct, fields_meta)
+    
     if not fields:
         raise BitrixError("Нет данных для обновления полей лида")
 
@@ -199,6 +238,25 @@ def update_lead_with_checklist(lead_id: str, gemini_struct: Dict[str, Any]) -> D
         'params': {'REGISTER_SONET_EVENT': 'Y'}
     }
     return _make_bitrix_request('crm.lead.update.json', data)
+
+def update_lead_and_create_task(lead_id: str, gemini_struct: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Обновляет лид и создает задачу в одном вызове
+    """
+    # Обновляем лид
+    lead_result = update_lead_with_checklist(lead_id, gemini_struct)
+    
+    # Создаем задачу
+    analysis = gemini_struct.get('analysis', '')
+    task_title = "Обработать результаты анализа встречи"
+    task_description = f"Лид {lead_id} был обновлен на основе анализа встречи.\n\nКлючевые выводы:\n{analysis[:500]}..."
+    
+    try:
+        task_result = create_task(lead_id, task_title, task_description)
+        return lead_result, task_result
+    except Exception as e:
+        log.error(f"Ошибка создания задачи: {e}")
+        return lead_result, {"error": str(e)}
 
 def test_bitrix_connection() -> bool:
     try:
