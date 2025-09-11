@@ -112,7 +112,30 @@ def webhook():
         return {"ok": True}
 
     # --- FSM логика ---
-    if state == "idle":
+    if state == "awaiting_lead_id":
+        if text.isdigit():
+            lead_id = int(text)
+            analysis = user_states[chat_id]["last_analysis"]
+            send_message(chat_id, f"🔗 Обновляю лид {lead_id}...")
+
+            try:
+                result = update_lead_comprehensive(lead_id, analysis)
+                msg = f"✅ Лид {lead_id} успешно обновлён в Bitrix"
+                if isinstance(result, dict) and result.get('task_created'):
+                    task_id = result.get('task_id') or '—'
+                    msg += f"\n🗓 Создана задача, ID: {task_id}"
+                send_message(chat_id, msg)
+                log.info(f"Lead {lead_id} updated: {result}")
+            except Exception as e:
+                send_message(chat_id, f"❌ Ошибка обновления лида {lead_id}: {e}")
+                log.error(f"Ошибка при обновлении лида {lead_id}: {e}")
+
+            # Очистка состояния
+            user_states[chat_id] = {"state": "idle", "last_analysis": None}
+        else:
+            send_message(chat_id, "❗ Введи корректный ID (только цифры).")
+
+    elif state == "idle":
         # Если пользователь прислал ID лида цифрами даже в idle — используем последнее сохранённое
         if text.isdigit() and user_states.get(chat_id, {}).get("last_analysis"):
             lead_id = int(text)
@@ -181,29 +204,6 @@ def webhook():
 
             send_message(chat_id, summary)
             send_message(chat_id, "Теперь введи ID лида, чтобы обновить его в Bitrix ⬇️")
-
-    elif state == "awaiting_lead_id":
-        if text.isdigit():
-            lead_id = int(text)
-            analysis = user_states[chat_id]["last_analysis"]
-            send_message(chat_id, f"🔗 Обновляю лид {lead_id}...")
-
-            try:
-                result = update_lead_comprehensive(lead_id, analysis)
-                msg = f"✅ Лид {lead_id} успешно обновлён в Bitrix"
-                if isinstance(result, dict) and result.get('task_created'):
-                    task_id = result.get('task_id') or '—'
-                    msg += f"\n🗓 Создана задача, ID: {task_id}"
-                send_message(chat_id, msg)
-                log.info(f"Lead {lead_id} updated: {result}")
-            except Exception as e:
-                send_message(chat_id, f"❌ Ошибка обновления лида {lead_id}: {e}")
-                log.error(f"Ошибка при обновлении лида {lead_id}: {e}")
-
-            # Очистка состояния
-            user_states[chat_id] = {"state": "idle", "last_analysis": None}
-        else:
-            send_message(chat_id, "❗ Введи корректный ID (только цифры).")
 
     return {"ok": True}
 
