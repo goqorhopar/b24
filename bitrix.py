@@ -19,6 +19,8 @@ MAX_RETRIES = int(os.getenv('MAX_RETRIES', '3'))
 RETRY_DELAY = float(os.getenv('RETRY_DELAY', '2'))
 MAX_COMMENT_LENGTH = int(os.getenv('MAX_COMMENT_LENGTH', '8000'))
 
+_BITRIX_FIELDS_CACHE: Optional[Dict[str, Any]] = None
+
 
 class BitrixError(Exception):
     pass
@@ -79,6 +81,84 @@ def _make_bitrix_request(method: str, data: Dict[str, Any], retries: int = MAX_R
 def get_lead_fields() -> Dict[str, Any]:
     """Получение описания полей лида"""
     return _make_bitrix_request('crm.lead.fields.json', {})
+
+
+def _get_fields_meta(force_refresh: bool = False) -> Dict[str, Any]:
+    global _BITRIX_FIELDS_CACHE
+    if force_refresh or _BITRIX_FIELDS_CACHE is None:
+        try:
+            fields_resp = get_lead_fields()
+            if isinstance(fields_resp, dict) and 'result' in fields_resp:
+                _BITRIX_FIELDS_CACHE = fields_resp['result']
+            else:
+                _BITRIX_FIELDS_CACHE = {}
+        except Exception as e:
+            log.exception(f"Не удалось получить описание полей лида: {e}")
+            _BITRIX_FIELDS_CACHE = {}
+    return _BITRIX_FIELDS_CACHE or {}
+
+
+def _enum_id_by_label(field_code: str, label_value: Any) -> Optional[str]:
+    """Преобразует текстовую метку перечисления в ID для поля field_code."""
+    if label_value is None:
+        return None
+    try:
+        if isinstance(label_value, (int, float)):
+            return str(int(label_value))
+        if isinstance(label_value, str) and label_value.strip().isdigit():
+            return label_value.strip()
+    except Exception:
+        pass
+
+    fields = _get_fields_meta()
+    meta = fields.get(field_code)
+    if not isinstance(meta, dict):
+        return None
+    items = meta.get('items') or []
+    if not isinstance(items, list):
+        return None
+
+    val_norm = str(label_value).strip().lower()
+    for it in items:
+        if isinstance(it, dict) and str(it.get('VALUE', '')).strip().lower() == val_norm:
+            return str(it.get('ID')) if it.get('ID') is not None else None
+    for it in items:
+        if isinstance(it, dict) and val_norm in str(it.get('VALUE', '')).strip().lower():
+            return str(it.get('ID')) if it.get('ID') is not None else None
+    return None
+
+
+def _format_date(date_str: Optional[str]) -> Optional[str]:
+    if not date_str:
+        return None
+    try:
+        s = str(date_str).strip()
+        if len(s) >= 19:
+            dt = datetime.strptime(s[:19], '%Y-%m-%d %H:%M:%S')
+            return dt.strftime('%Y-%m-%d')
+        if len(s) == 10:
+            dt = datetime.strptime(s, '%Y-%m-%d')
+            return dt.strftime('%Y-%m-%d')
+    except Exception:
+        return None
+    return None
+
+
+def _format_datetime(dt_str: Optional[str], default_hour: int = 18) -> Optional[str]:
+    if not dt_str:
+        return None
+    try:
+        s = str(dt_str).strip()
+        if len(s) >= 19:
+            dt = datetime.strptime(s[:19], '%Y-%m-%d %H:%M:%S')
+            return dt.strftime('%Y-%m-%d %H:%M:%S')
+        if len(s) == 10:
+            d = datetime.strptime(s, '%Y-%m-%d')
+            d = d.replace(hour=default_hour, minute=0, second=0)
+            return d.strftime('%Y-%m-%d %H:%M:%S')
+    except Exception:
+        return None
+    return None
 
 
 def get_lead_info(lead_id: str) -> Dict[str, Any]:
@@ -227,31 +307,61 @@ def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict
 
         # 2) Попробуем собрать fields для обновления (простое поведение — маппинг известных ключей)
         fields_payload = {}
-        # Перечисляем возможные поля, которые могут присутствовать и соответствуют UF_*
+        # Перечисляем возможные поля
         mapping = {
-            'wow_effect': 'UF_CRM_1754665062',
-            'product': 'UF_CRM_1579102568584',
-            'task_formulation': 'UF_CRM_1592909799043',
-            'ad_budget': 'UF_CRM_1592910027',
-            'is_lpr': 'UF_CRM_1754651857',
-            'meeting_scheduled': 'UF_CRM_1754651891',
-            'meeting_done': 'UF_CRM_1754651937',
-            'client_type_text': 'UF_CRM_1547738289',
-            'bad_reason_text': 'UF_CRM_1555492157080',
-            'kp_done_text': 'UF_CRM_1754652099',
-            'lpr_confirmed_text': 'UF_CRM_1755007163632',
-            'source_text': 'UF_CRM_1648714327',
-            'our_product_text': 'UF_CRM_1741622365',
+            'wow_effect': 'UF_CRM_1754665062',               # string
+            'product': 'UF_CRM_1579102568584',                # string
+            'task_formulation': 'UF_CRM_1592909799043',       # string
+            'ad_budget': 'UF_CRM_1592910027',                 # string
+            'is_lpr': 'UF_CRM_1754651857',                    # boolean
+            'meeting_scheduled': 'UF_CRM_1754651891',         # boolean
+            'meeting_done': 'UF_CRM_1754651937',              # boolean
+            'client_type_text': 'UF_CRM_1547738289',          # enumeration
+            'bad_reason_text': 'UF_CRM_1555492157080',        # enumeration
+            'kp_done_text': 'UF_CRM_1754652099',              # enumeration (Да/Нет)
+            'lpr_confirmed_text': 'UF_CRM_1755007163632',     # enumeration (Да/Нет)
+            'source_text': 'UF_CRM_1648714327',               # enumeration
+            'our_product_text': 'UF_CRM_1741622365',          # enumeration
+            'closing_comment': 'UF_CRM_1592911226916',        # string
+            'meeting_responsible_id': 'UF_CRM_1756298185',    # employee (user id)
+            'meeting_date': 'UF_CRM_1755862426686',           # date
+            'planned_meeting_date': 'UF_CRM_1757408917',      # datetime
         }
 
+        fields_meta = _get_fields_meta()
         for k, uf in mapping.items():
             if k in gemini_data and gemini_data.get(k) is not None:
                 val = gemini_data.get(k)
-                # Bool -> '1'/'0' if necessary for Bitrix
-                if isinstance(val, bool):
-                    fields_payload[uf] = '1' if val else '0'
-                else:
-                    fields_payload[uf] = str(val)
+                fmeta = fields_meta.get(uf) or {}
+                ftype = fmeta.get('type')
+                try:
+                    if ftype == 'boolean':
+                        if isinstance(val, bool):
+                            fields_payload[uf] = '1' if val else '0'
+                        elif isinstance(val, str):
+                            v = val.strip().lower()
+                            fields_payload[uf] = '1' if v in ('1', 'true', 'yes', 'да') else '0' if v in ('0', 'false', 'no', 'нет') else None
+                    elif ftype == 'enumeration':
+                        enum_id = _enum_id_by_label(uf, val)
+                        if enum_id:
+                            fields_payload[uf] = enum_id
+                    elif ftype == 'date':
+                        fmt = _format_date(val)
+                        if fmt:
+                            fields_payload[uf] = fmt
+                    elif ftype == 'datetime':
+                        fmt = _format_datetime(val)
+                        if fmt:
+                            fields_payload[uf] = fmt
+                    elif ftype == 'employee':
+                        if isinstance(val, (int, float)):
+                            fields_payload[uf] = int(val)
+                        elif isinstance(val, str) and val.strip().isdigit():
+                            fields_payload[uf] = int(val.strip())
+                    else:
+                        fields_payload[uf] = str(val)
+                except Exception as e:
+                    log.debug(f"Пропущено поле {uf} из-за ошибки преобразования: {e}")
 
         if fields_payload:
             data = {
@@ -304,31 +414,24 @@ def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict
                     descr_parts.append(f"Комментарий: {closing_comment}")
                 description = "\n".join(descr_parts)
 
-                # Если есть явный дедлайн — временно изменим глобальную настройку через локальную переменную
-                if deadline:
-                    try:
-                        task_resp = create_task(
-                            lead_id=str(lead_id),
-                            title=title,
-                            description=description,
-                            responsible_id=task_responsible or None,
-                            deadline=deadline
-                        )
-                        # Bitrix сам поставит DEADLINE из полей, мы передаём текстовое поле — для явного дедлайна нужно через поля
-                        # но API tasks.task.add принимает DEADLINE в fields, которое мы не прокидываем напрямую через create_task
-                        # Поэтому если нужен точный DEADLINE, создадим ещё один запрос на обновление задачи — пропустим для простоты
-                        result['task_created'] = True
-                        # получить id задачи
-                        if isinstance(task_resp, dict):
-                            # возможные варианты: {'result': {'task': {'id': 123}}} или {'result': {'task': {'id': '123'}}}
-                            task_obj = task_resp.get('result') or {}
-                            if isinstance(task_obj, dict):
-                                task_entity = task_obj.get('task') or task_obj
-                                if isinstance(task_entity, dict):
-                                    task_id = task_entity.get('id') or task_entity.get('task', {}).get('id')
-                                    result['task_id'] = str(task_id) if task_id else None
-                    except Exception as e:
-                        log.exception(f"Не удалось создать задачу для лида {lead_id}: {e}")
+                try:
+                    task_resp = create_task(
+                        lead_id=str(lead_id),
+                        title=title,
+                        description=description,
+                        responsible_id=task_responsible or None,
+                        deadline=deadline
+                    )
+                    result['task_created'] = True
+                    if isinstance(task_resp, dict):
+                        task_obj = task_resp.get('result') or {}
+                        if isinstance(task_obj, dict):
+                            task_entity = task_obj.get('task') or task_obj
+                            if isinstance(task_entity, dict):
+                                task_id = task_entity.get('id') or task_entity.get('task', {}).get('id')
+                                result['task_id'] = str(task_id) if task_id else None
+                except Exception as e:
+                    log.exception(f"Не удалось создать задачу для лида {lead_id}: {e}")
 
             # Если ЛПР найден, но встреча не назначена — создаём задачу назначить встречу
             elif is_lpr and not meeting_scheduled and not meeting_done:
