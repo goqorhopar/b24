@@ -5,8 +5,8 @@ import time
 import re
 import json
 from typing import Dict, Any, Optional
-from datetime import datetime
 import requests
+from datetime import datetime
 
 # Попытка импортировать google.generativeai (работает с разными версиями)
 try:
@@ -95,16 +95,45 @@ def _build_analysis_prompt(transcript: str) -> str:
     """
     current_date = datetime.now().strftime("%d.%m.%Y")
     prompt = (
-        f"Ты — эксперт-аналитик по продажам в digital-агентстве. Сегодня {current_date}.\n\n"
-        "ЗАДАЧА: Проанализируй транскрипт встречи с потенциальным клиентом и верни JSON со следующими полями "
-        "(все поля должны присутствовать, отсутствующие — null):\n\n"
-        '{"analysis","wow_effect","product","task_formulation","ad_budget","closing_comment",'
-        '"is_lpr","meeting_scheduled","meeting_done",'
-        '"client_type_text","bad_reason_text","kp_done_text","lpr_confirmed_text","source_text","our_product_text",'
-        '"meeting_date","planned_meeting_date","meeting_responsible_id"}\n\n'
-        "Укажи boolean поля как true/false/null, строковые поля — как строки или null. "
-        "Для дат используй формат YYYY-MM-DD или YYYY-MM-DD HH:MM:SS. "
-        "Возвращай ТОЛЬКО корректный JSON-объект, без дополнительного текста.\n\n"
+        f"Ты — эксперт-аналитик продаж. Сегодня {current_date}.\n\n"
+        "ЗАДАЧА: Проанализируй транскрипт и верни ТОЛЬКО JSON-объект со всеми полями (отсутствующие — null).\n\n"
+        "Структура JSON:\n"
+        "{\n"
+        "  \"analysis\": string,\n"
+        "  \"key_request\": string,\n"
+        "  \"pains_text\": string,\n"
+        "  \"budget_value\": number,\n"
+        "  \"budget_currency\": string,\n"
+        "  \"timeline_text\": string,\n"
+        "  \"goal_text\": string,\n"
+        "  \"client_name\": string,\n"
+        "  \"client_last_name\": string,\n"
+        "  \"position\": string,\n"
+        "  \"company_title\": string,\n"
+        "  \"product\": string,\n"
+        "  \"task_formulation\": string,\n"
+        "  \"ad_budget\": string,\n"
+        "  \"closing_comment\": string,\n"
+        "  \"is_lpr\": boolean,\n"
+        "  \"meeting_scheduled\": boolean,\n"
+        "  \"meeting_done\": boolean,\n"
+        "  \"client_type_text\": string,\n"
+        "  \"bad_reason_text\": string,\n"
+        "  \"kp_done_text\": string,\n"
+        "  \"lpr_confirmed_text\": string,\n"
+        "  \"source_id_code\": string,\n"
+        "  \"source_id_text\": string,\n"
+        "  \"source_text\": string,\n"
+        "  \"our_product_text\": string,\n"
+        "  \"meeting_date\": string (YYYY-MM-DD),\n"
+        "  \"planned_meeting_date\": string (YYYY-MM-DD HH:MM:SS),\n"
+        "  \"meeting_responsible_id\": number,\n"
+        "  \"sentiment\": string (one of: interested, doubtful, rushed, neutral),\n"
+        "  \"next_action\": string (one of: call, send_kp, schedule_demo, none),\n"
+        "  \"next_action_comment\": string\n"
+        "}\n\n"
+        "Правила: boolean — true/false/null; строки — строки или null; числа — number или null; даты — в указанном формате.\n"
+        "Верни строго JSON без пояснений.\n\n"
         "ТРАНСКРИПТ:\n```\n" + transcript.strip() + "\n```\n"
     )
     return prompt
@@ -119,7 +148,7 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
         return None
 
     # 1) JSON в ```json ... ```
-    m = re.search(r'```json\\s*(\\{.*\\})\\s*```', text, re.DOTALL | re.IGNORECASE)
+    m = re.search(r'```json\s*(\{.*\})\s*```', text, re.DOTALL | re.IGNORECASE)
     if m:
         try:
             return json.loads(m.group(1))
@@ -153,7 +182,7 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
             continue
 
     # 3) Попытка найти простой JSON по regex (последняя инстанция)
-    json_matches = re.findall(r'\\{(?:[^{}]|\\{[^{}]*\\})*\\}', text, re.DOTALL)
+    json_matches = re.findall(r'\{(?:[^{}]|\{[^{}]*\})*\}', text, re.DOTALL)
     for match in sorted(json_matches, key=len, reverse=True):
         try:
             parsed = json.loads(match)
@@ -171,10 +200,14 @@ def validate_gemini_output(data: Dict[str, Any]) -> Dict[str, Any]:
     Нормализует булевы поля, оставляет все ожидаемые ключи.
     """
     expected_fields = [
-        "analysis", "wow_effect", "product", "task_formulation", "ad_budget", "closing_comment",
+        "analysis", "key_request", "pains_text", "budget_value", "budget_currency", "timeline_text", "goal_text",
+        "client_name", "client_last_name", "position", "company_title",
+        "product", "task_formulation", "ad_budget", "closing_comment",
         "is_lpr", "meeting_scheduled", "meeting_done",
-        "client_type_text", "bad_reason_text", "kp_done_text", "lpr_confirmed_text", "source_text", "our_product_text",
-        "meeting_date", "planned_meeting_date", "meeting_responsible_id"
+        "client_type_text", "bad_reason_text", "kp_done_text", "lpr_confirmed_text",
+        "source_id_code", "source_id_text", "source_text", "our_product_text",
+        "meeting_date", "planned_meeting_date", "meeting_responsible_id",
+        "sentiment", "next_action", "next_action_comment"
     ]
 
     normalized: Dict[str, Any] = {}
@@ -198,8 +231,15 @@ def validate_gemini_output(data: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 normalized[f] = None
         else:
-            # сохраняем значение или None
-            normalized[f] = v if v is not None else None
+            # числа
+            if f in ("budget_value", "meeting_responsible_id"):
+                try:
+                    normalized[f] = float(v) if v is not None else None
+                except Exception:
+                    normalized[f] = None
+            else:
+                # сохраняем значение или None
+                normalized[f] = v if v is not None else None
 
     return normalized
 
