@@ -2,232 +2,267 @@ import os
 import logging
 import requests
 import time
+import json
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
+from datetime import datetime
+from typing import Dict, Any, Optional
 
-from db import init_db, set_session, get_session, clear_session, log_operation
-from gemini_client import analyze_transcript_structured
-from bitrix import update_lead_with_checklist, BitrixError
-from utils import sanitize_text
+# Импорты модулей проекта
+from db import (
+    init_db, set_session, get_session, clear_session, 
+    log_operation, get_stats, cleanup_old_sessions
+)
+from gemini_client import (
+    analyze_transcript_structured, create_analysis_summary,
+    get_gemini_info, test_gemini_connection
+)
+from bitrix import (
+    update_lead_comprehensive, test_bitrix_connection, 
+    get_bitrix_info, BitrixError, get_lead_info
+)
+from utils import (
+    sanitize_text, validate_env_vars, health_check,
+    create_message, RESPONSE_TEMPLATES
+)
 
+# Загрузка переменных окружения
 load_dotenv()
 
+# Настройка логирования
+log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
 logging.basicConfig(
-    level=getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper()),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=getattr(logging, log_level),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('bot.log', encoding='utf-8') if os.getenv('NODE_ENV') != 'production' else logging.NullHandler()
+    ]
 )
 log = logging.getLogger(__name__)
 
+# Переменные окружения
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 BITRIX_WEBHOOK_URL = os.getenv('BITRIX_WEBHOOK_URL')
 ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')
 RENDER_EXTERNAL_URL = os.getenv('RENDER_EXTERNAL_URL')
 PORT = int(os.getenv('PORT', 3000))
+NODE_ENV = os.getenv('NODE_ENV', 'development')
 
+# Проверка критических переменных
 required_vars = {
     'TELEGRAM_BOT_TOKEN': TOKEN,
     'GEMINI_API_KEY': GEMINI_API_KEY,
     'RENDER_EXTERNAL_URL': RENDER_EXTERNAL_URL
 }
-for var_name, var_value in required_vars.items():
-    if not var_value:
-        raise RuntimeError(f"Переменная окружения {var_name} обязательна!")
 
+missing_vars = [name for name, value in required_vars.items() if not value]
+if missing_vars:
+    raise RuntimeError(f"Отсутствуют критические переменные окружения: {missing_vars}")
+
+# Telegram API настройки
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TOKEN}"
 WEBHOOK_URL = f"{RENDER_EXTERNAL_URL.rstrip('/')}/webhook"
 
-init_db()
+# Инициализация Flask приложения
 app = Flask(__name__)
+app.config['JSON_AS_ASCII'] = False
 
+# Инициализация базы данных
+try:
+    init_db()
+    log.info("База данных успешно инициализирована")
+except Exception as e:
+    log.critical(f"Критическая ошибка инициализации БД: {e}")
+    raise
+
+# Константы состояний
 STATE_WAIT_TRANSCRIPT = "WAIT_TRANSCRIPT"
 STATE_WAIT_LEAD_ID = "WAIT_LEAD_ID"
+STATE_PROCESSING = "PROCESSING"
 
-def send_message(chat_id, text, parse_mode="HTML"):
+# Системные настройки
+MAX_MESSAGE_LENGTH = 4096
+PROCESSING_TIMEOUT = 300  # 5 минут
+ADMIN_COMMANDS = ['/stats', '/health', '/cleanup', '/info']
+
+def send_telegram_message(chat_id: int, text: str, parse_mode: str = "HTML", 
+                         disable_preview: bool = True) -> bool:
+    """Отправка сообщения в Telegram с обработкой ошибок и разбивкой длинных сообщений"""
     try:
-        max_length = 4096
-        text = text or ""
-        if len(text) > max_length:
-            for i in range(0, len(text), max_length):
-                chunk = text[i:i+max_length]
-                response = requests.post(
-                    f"{TELEGRAM_API_URL}/sendMessage",
-                    json={"chat_id": chat_id, "text": chunk, "parse_mode": parse_mode},
-                    timeout=30
-                )
-                response.raise_for_status()
-                time.sleep(0.1)
-        else:
-            response = requests.post(
-                f"{TELEGRAM_API_URL}/sendMessage",
-                json={"chat_id": chat_id, "text": text, "parse_mode": parse_mode},
-                timeout=30
-            )
-            response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        log.error(f"Ошибка отправки сообщения в чат {chat_id}: {e}")
-        if ADMIN_CHAT_ID and str(chat_id) != str(ADMIN_CHAT_ID):
-            try:
-                requests.post(
-                    f"{TELEGRAM_API_URL}/sendMessage",
-                    json={"chat_id": ADMIN_CHAT_ID, "text": f"❌ Ошибка отправки в чат {chat_id}: {str(e)[:500]}"},
-                    timeout=15
-                )
-            except:
-                pass
-
-def notify_admin(message):
-    if ADMIN_CHAT_ID:
-        try:
-            requests.post(
-                f"{TELEGRAM_API_URL}/sendMessage",
-                json={"chat_id": ADMIN_CHAT_ID, "text": f"🔔 Admin: {message}"},
-                timeout=15
-            )
-        except Exception as e:
-            log.error(f"Ошибка уведомления админа: {e}")
-
-def validate_lead_id(lead_id: str) -> bool:
-    try:
-        int(str(lead_id).strip())
+        if not text or not text.strip():
+            log.warning(f"Попытка отправить пустое сообщение в чат {chat_id}")
+            return False
+        
+        text = text.strip()
+        
+        # Разбиваем длинные сообщения
+        if len(text) > MAX_MESSAGE_LENGTH:
+            chunks = []
+            while text:
+                if len(text) <= MAX_MESSAGE_LENGTH:
+                    chunks.append(text)
+                    break
+                
+                # Находим последний перенос строки в пределах лимита
+                cut_pos = text.rfind('\n', 0, MAX_MESSAGE_LENGTH)
+                if cut_pos == -1:
+                    cut_pos = MAX_MESSAGE_LENGTH - 3
+                
+                chunk = text[:cut_pos]
+                if len(text) > cut_pos:
+                    chunk += "..."
+                chunks.append(chunk)
+                text = "..." + text[cut_pos:].lstrip()
+            
+            # Отправляем части с задержкой
+            for i, chunk in enumerate(chunks):
+                success = send_telegram_message(chat_id, chunk, parse_mode, disable_preview)
+                if not success:
+                    return False
+                if i < len(chunks) - 1:
+                    time.sleep(0.5)  # Задержка между частями
+            return True
+        
+        # Отправка одного сообщения
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": parse_mode,
+            "disable_web_page_preview": disable_preview
+        }
+        
+        response = requests.post(
+            f"{TELEGRAM_API_URL}/sendMessage",
+            json=payload,
+            timeout=30
+        )
+        response.raise_for_status()
+        
+        result = response.json()
+        if not result.get('ok'):
+            log.error(f"Telegram API вернул ошибку: {result}")
+            return False
+        
+        log.debug(f"Сообщение отправлено в чат {chat_id}")
         return True
-    except:
+        
+    except requests.exceptions.RequestException as e:
+        log.error(f"Ошибка HTTP при отправке сообщения в чат {chat_id}: {e}")
+        notify_admin(f"❌ Ошибка отправки сообщения в чат {chat_id}: {str(e)[:200]}")
+        return False
+    except Exception as e:
+        log.error(f"Неожиданная ошибка отправки сообщения в чат {chat_id}: {e}")
         return False
 
-@app.route('/health', methods=['GET'])
-def health():
-    return jsonify({"ok": True})
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
+def notify_admin(message: str, urgent: bool = False) -> None:
+    """Уведомление администратора"""
+    if not ADMIN_CHAT_ID:
+        return
+    
     try:
-        data = request.get_json()
-        message = (data or {}).get('message')
-        if not message:
-            return jsonify({"ok": True})
-
-        chat_id = message['chat']['id']
-        text = (message.get('text') or '').strip()
-        entities = message.get('entities') or []
-        user_name = message.get('from', {}).get('username', 'Unknown')
-
-        if not text:
-            send_message(chat_id, "❌ Пустое сообщение. Отправьте текст.")
-            return jsonify({"ok": True})
-
-        # Commands
-        if text.startswith('/start'):
-            clear_session(chat_id)
-            set_session(chat_id, STATE_WAIT_TRANSCRIPT, transcript=None)
-            send_message(chat_id,
-                "🤖 <b>Анализ встреч с Gemini</b>\n\n"
-                "Отправьте мне транскрипт встречи (текст). После анализа я попрошу ID лида из Bitrix24 и обновлю его по чеклисту.\n\n"
-                "<i>Команды:</i>\n/start — начать заново\n/cancel — отменить\n/help — помощь"
-            )
-            return jsonify({"ok": True})
-
-        if text.startswith('/cancel'):
-            clear_session(chat_id)
-            send_message(chat_id, "✅ Операция отменена. Можете отправить новый транскрипт.")
-            return jsonify({"ok": True})
-
-        if text.startswith('/help'):
-            send_message(chat_id,
-                "<b>Как работать:</b>\n"
-                "1) Пришлите транскрипт встречи\n"
-                "2) Когда анализ будет готов — пришлите ID лида\n"
-                "3) Я обновлю лид: добавлю анализ в COMMENTS и заполню поля чеклиста"
-            )
-            return jsonify({"ok": True})
-
-        # State
-        session = get_session(chat_id) or {}
-        state = session.get('state')
-
-        # Step 1: Получаем транскрипт
-        if state in (None, "", STATE_WAIT_TRANSCRIPT):
-            set_session(chat_id, STATE_WAIT_TRANSCRIPT, transcript=text)
-            send_message(chat_id, "🔄 Анализирую транскрипт через Gemini, подождите...")
-            log_operation(chat_id, "gemini_analyze", "started", None)
-
-            try:
-                analysis_text, gemini_data = analyze_transcript_structured(text)
-                # Сохраняем в сессию оба объекта
-                # Запишем JSON в operation_logs для прозрачности
-                import json
-                log_operation(chat_id, "gemini_analyze", "success", json.dumps(gemini_data)[:1000])
-
-                # Покажем анализ
-                analysis_text_sanitized = sanitize_text(analysis_text, max_length=4000)
-                send_message(chat_id, f"✅ <b>Анализ готов</b>:\n\n{analysis_text_sanitized}")
-
-                # Попросим ID лида
-                set_session(chat_id, STATE_WAIT_LEAD_ID, transcript=text)
-                # Временно сохраним gemini_data в оперативном кэше бэкенда через лог/хранилище:
-                # проще всего — положить в отдельную таблицу. Для простоты — в operation_logs.
-                log_operation(chat_id, "gemini_payload", "cached", json.dumps(gemini_data)[:3000])
-
-                send_message(chat_id, "ℹ️ Теперь введите <b>ID лида</b> в Bitrix24 для обновления.")
-                return jsonify({"ok": True})
-            except Exception as e:
-                log_operation(chat_id, "gemini_analyze", "error", str(e))
-                send_message(chat_id, f"❌ Ошибка анализа: {e}")
-                clear_session(chat_id)
-                return jsonify({"ok": True})
-
-        # Step 2: Ждём ID лида и обновляем Bitrix
-        if state == STATE_WAIT_LEAD_ID:
-            lead_id = text
-            if not validate_lead_id(lead_id):
-                send_message(chat_id, "❌ Неверный формат ID. Пришлите числовой ID лида.")
-                return jsonify({"ok": True})
-
-            # Достаём последний payload Gemini из operation_logs
-            # Для простоты: перезапускаем анализ по сохранённому транскрипту (надёжно и просто)
-            try:
-                transcript = session.get('transcript') or ""
-                if not transcript:
-                    send_message(chat_id, "⚠️ Транскрипт не найден в сессии. Пришлите его ещё раз.")
-                    clear_session(chat_id)
-                    return jsonify({"ok": True})
-
-                send_message(chat_id, "🔧 Обновляю лид в Bitrix24 по чеклисту...")
-
-                analysis_text, gemini_data = analyze_transcript_structured(transcript)
-
-                if not os.getenv('BITRIX_WEBHOOK_URL'):
-                    send_message(chat_id, "⚠️ BITRIX_WEBHOOK_URL не настроен. Не могу обновить лид в Bitrix24.")
-                    clear_session(chat_id)
-                    return jsonify({"ok": True})
-
-                result = update_lead_with_checklist(lead_id, gemini_data)
-                if result.get('result') is True:
-                    send_message(chat_id, f"✅ Лид {lead_id} успешно обновлён.")
-                else:
-                    send_message(chat_id, f"⚠️ Ответ Bitrix: {result}")
-
-                clear_session(chat_id)
-                return jsonify({"ok": True})
-
-            except BitrixError as be:
-                send_message(chat_id, f"❌ Ошибка Bitrix: {be}")
-                clear_session(chat_id)
-                return jsonify({"ok": True})
-            except Exception as e:
-                send_message(chat_id, f"❌ Ошибка обновления лида: {e}")
-                clear_session(chat_id)
-                return jsonify({"ok": True})
-
-        # Fallback: если состояние неизвестно — начнём заново
-        clear_session(chat_id)
-        set_session(chat_id, STATE_WAIT_TRANSCRIPT, transcript=None)
-        send_message(chat_id, "📝 Отправьте транскрипт встречи для анализа.")
-        return jsonify({"ok": True})
-
+        prefix = "🚨 URGENT:" if urgent else "🔔 Admin:"
+        admin_message = f"{prefix} {message}"
+        
+        send_telegram_message(int(ADMIN_CHAT_ID), admin_message)
+        log.debug("Администратор уведомлен")
     except Exception as e:
-        log.error(f"Webhook error: {e}", exc_info=True)
-        return jsonify({"ok": True})
+        log.error(f"Ошибка уведомления администратора: {e}")
 
-if __name__ == "__main__":
-    # Локальный запуск: можно настроить вебхук при необходимости
-    app.run(host="0.0.0.0", port=PORT)
+def validate_lead_id(lead_id: str) -> bool:
+    """Валидация ID лида"""
+    try:
+        id_num = int(str(lead_id).strip())
+        return 1 <= id_num <= 999999999  # Разумные пределы
+    except (ValueError, TypeError):
+        return False
+
+def format_analysis_message(analysis_text: str, structured_data: Dict[str, Any]) -> str:
+    """Форматирование сообщения с анализом для отправки пользователю"""
+    
+    # Основной анализ
+    message_parts = ["✅ <b>Анализ встречи завершен</b>\n"]
+    
+    # Краткое резюме
+    is_lpr = structured_data.get('is_lpr', False)
+    meeting_done = structured_data.get('meeting_done', False) 
+    kp_done = structured_data.get('kp_done_text', '').lower() == 'да'
+    
+    message_parts.append("📊 <b>Ключевые индикаторы:</b>")
+    message_parts.append(f"• ЛПР: {'✅ Найден' if is_lpr else '❌ Не найден'}")
+    message_parts.append(f"• Встреча: {'✅ Проведена' if meeting_done else '❌ Не проведена'}")
+    message_parts.append(f"• КП: {structured_data.get('kp_done_text', 'Не указано')}")
+    
+    # Дополнительная информация
+    client_type = structured_data.get('client_type_text')
+    if client_type:
+        message_parts.append(f"• Тип клиента: <b>{client_type}</b>")
+    
+    budget = structured_data.get('ad_budget')
+    if budget:
+        message_parts.append(f"• Бюджет: <b>{budget}</b>")
+    
+    product = structured_data.get('product')
+    if product and len(product) > 5:
+        product_short = product[:80] + "..." if len(product) > 80 else product
+        message_parts.append(f"• Продукт клиента: <i>{product_short}</i>")
+    
+    # WOW-эффект
+    wow_effect = structured_data.get('wow_effect')
+    if wow_effect and len(wow_effect) > 5:
+        message_parts.append(f"\n💡 <b>WOW-эффект:</b>\n<i>{wow_effect[:200]}{'...' if len(wow_effect) > 200 else ''}</i>")
+    
+    # Анализ (укороченная версия)
+    if analysis_text and len(analysis_text) > 50:
+        analysis_short = analysis_text[:500] + "..." if len(analysis_text) > 500 else analysis_text
+        message_parts.append(f"\n📝 <b>Детальный анализ:</b>\n{analysis_short}")
+    
+    message_parts.append(f"\n<i>Обработано полей: {len([k for k, v in structured_data.items() if v is not None])}</i>")
+    
+    return "\n".join(message_parts)
+
+def handle_admin_command(chat_id: int, command: str, user_name: str) -> bool:
+    """Обработка административных команд"""
+    if str(chat_id) != str(ADMIN_CHAT_ID):
+        return False
+    
+    try:
+        if command == '/stats':
+            stats = get_stats()
+            gemini_info = get_gemini_info()
+            bitrix_info = get_bitrix_info()
+            
+            stats_message = f"""📊 <b>Статистика системы</b>
+
+🗄 <b>База данных:</b>
+• Всего сессий: {stats.get('total_sessions', 0)}
+• Активных сессий: {stats.get('active_sessions', 0)}
+• Операций за 24ч: {stats.get('operations_24h', 0)}
+• Успешных за 24ч: {stats.get('successful_ops_24h', 0)}
+• Процент успеха: {stats.get('success_rate_24h', 0):.1f}%
+
+🤖 <b>Gemini:</b>
+• Подключение: {'✅' if gemini_info.get('connection_test') else '❌'}
+• Модель: {gemini_info.get('model_name', 'неизвестно')}
+• Максимум попыток: {gemini_info.get('max_retries', 0)}
+
+🏢 <b>Bitrix24:</b>
+• Настроен: {'✅' if bitrix_info.get('webhook_configured') else '❌'}
+• Подключение: {'✅' if bitrix_info.get('connection_test') else '❌'}
+• Доступных полей: {bitrix_info.get('available_fields', 0)}
+• Пользовательских полей: {bitrix_info.get('custom_fields', 0)}
+
+⚙️ <b>Система:</b>
+• Окружение: {NODE_ENV}
+• Порт: {PORT}
+• Время работы: {datetime.now().strftime('%H:%M:%S')}"""
+
+            send_telegram_message(chat_id, stats_message)
+            return True
+            
+        elif command == '/health':
+            health_info = health_check()
+            
+            status_emoji = "✅" if health_info['status'] == 'healthy' else "❌"
+            health_message = f"""{status_emoji}
