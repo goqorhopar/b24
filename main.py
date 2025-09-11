@@ -105,7 +105,7 @@ def send_telegram_message(chat_id: int, text: str, parse_mode: str = "HTML",
                     chunks.append(text)
                     break
                 
-                # Находим последний перенос строки в пределах лимита
+                # Находим последний перенос строкя в пределах лимита
                 cut_pos = text.rfind('\n', 0, MAX_MESSAGE_LENGTH)
                 if cut_pos == -1:
                     cut_pos = MAX_MESSAGE_LENGTH - 3
@@ -265,4 +265,491 @@ def handle_admin_command(chat_id: int, command: str, user_name: str) -> bool:
             health_info = health_check()
             
             status_emoji = "✅" if health_info['status'] == 'healthy' else "❌"
-            health_message = f"""{status_emoji}
+            health_message = f"{status_emoji} <b>Проверка здоровья системы</b>\n\n"
+            health_message += f"Статус: {health_info['status']}\n"
+            health_message += f"Время проверки: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            health_message += "Детали:\n"
+            
+            for service, status in health_info['details'].items():
+                health_message += f"• {service}: {'✅' if status else '❌'}\n"
+            
+            if health_info['status'] != 'healthy':
+                health_message += "\n⚠️ <i>Для детальной информации проверьте логи системы</i>"
+            
+            send_telegram_message(chat_id, health_message)
+            return True
+            
+        elif command == '/cleanup':
+            cleaned_count = cleanup_old_sessions()
+            send_telegram_message(chat_id, f"🧹 Очищено {cleaned_count} устаревших сессий")
+            return True
+            
+        elif command == '/info':
+            gemini_info = get_gemini_info()
+            bitrix_info = get_bitrix_info()
+            
+            info_message = f"""ℹ️ <b>Информация о системе</b>
+
+🤖 <b>Gemini AI:</b>
+• Модель: {gemini_info.get('model_name', 'неизвестно')}
+• Доступность: {'✅ Доступен' if gemini_info.get('connection_test') else '❌ Недоступен'}
+• Токенов в минуту: {gemini_info.get('tokens_per_minute', 'неизвестно')}
+
+🏢 <b>Bitrix24:</b>
+• Вебхук: {'✅ Настроен' if bitrix_info.get('webhook_configured') else '❌ Не настроен'}
+• Подключение: {'✅ Работает' if bitrix_info.get('connection_test') else '❌ Ошибка'}
+• Поля для обновления: {bitrix_info.get('available_fields', 0)}
+
+📊 <b>Статистика:</b>
+• Окружение: {NODE_ENV}
+• Сервер: {RENDER_EXTERNAL_URL}
+• Версия Python: {os.sys.version.split()[0]}"""
+
+            send_telegram_message(chat_id, info_message)
+            return True
+            
+    except Exception as e:
+        log.error(f"Ошибка обработки административной команды {command}: {e}")
+        send_telegram_message(chat_id, f"❌ Ошибка выполнения команды: {str(e)[:200]}")
+        return False
+    
+    return False
+
+def handle_start(chat_id: int, user_name: str) -> None:
+    """Обработка команды /start"""
+    welcome_message = f"""👋 Добро пожаловать, {user_name}!
+
+🤖 <b>Я бот для анализа стенограмм встреч</b>
+
+📝 <b>Как работать со мной:</b>
+1. Отправьте команду /analyze
+2. Пришлите стенограмму встречи
+3. Укажите ID лида в Bitrix24
+4. Я проанализирую текст и обновлю данные лида
+
+⚡ <b>Основные команды:</b>
+• /start - показать это сообщение
+• /analyze - начать анализ новой встречи
+• /cancel - отменить текущую операцию
+• /help - справка по использованию
+
+📊 Я могу определить:
+• Проведена ли встреча
+• Найден ли ЛПР
+• Бюджет на рекламу
+• Тип клиента
+• WOW-эффект
+• И многое другое"""
+
+    send_telegram_message(chat_id, welcome_message)
+    log_operation(chat_id, "start_command", {"user_name": user_name})
+
+def handle_help(chat_id: int, user_name: str) -> None:
+    """Обработка команды /help"""
+    help_message = """📖 <b>Справка по использованию бота</b>
+
+🔹 <b>Процесс анализа:</b>
+1. Используйте /analyze для начала
+2. Пришлите текст стенограммы встречи
+3. Укажите ID лида из Bitrix24
+4. Дождитесь обработки (1-2 минуты)
+
+🔹 <b>Требования к тексту:</b>
+• Минимум 100 символов
+• Лучше всего - полная расшифровка
+• Можно на русском или английском
+• Поддерживается форматирование
+
+🔹 <b>Доступные команды:</b>
+• /start - начать работу
+• /analyze - анализ встречи
+• /cancel - отмена операции
+• /status - статус системы
+• /help - эта справка
+
+🔹 <b>Поддерживаемые поля Bitrix24:</b>
+• Статус встречи
+• Комментарии менеджера
+• Бюджет на рекламу
+• Тип клиента
+• Продукт клиента
+• WOW-эффект
+• И многие другие
+
+💡 <b>Совет:</b> Чем детальнее стенограмма, тем точнее анализ!"""
+
+    send_telegram_message(chat_id, help_message)
+    log_operation(chat_id, "help_command", {"user_name": user_name})
+
+def handle_analyze(chat_id: int, user_name: str) -> None:
+    """Обработка команды /analyze"""
+    try:
+        # Проверяем доступность сервисов
+        health = health_check()
+        if not health['details'].get('gemini', False):
+            send_telegram_message(chat_id, "❌ Сервис анализа временно недоступен. Попробуйте позже.")
+            return
+        
+        # Устанавливаем состояние ожидания транскрипта
+        set_session(chat_id, {
+            'state': STATE_WAIT_TRANSCRIPT,
+            'created_at': datetime.now().isoformat(),
+            'user_name': user_name
+        })
+        
+        analyze_message = """📝 <b>Режим анализа встречи</b>
+
+Пожалуйста, пришлите текст стенограммы вашей встречи.
+
+🔹 <b>Рекомендации:</b>
+• Минимум 100 символов
+• Полная расшифровка лучше фрагментов
+• Можно включить несколько реплик
+• Поддерживаются русский и английский
+
+📋 <b>Что я ищу в тексте:</b>
+• Была ли встреча проведена
+• Найден ли ЛПР (лицо, принимающее решение)
+• Бюджет на рекламу
+• Тип бизнеса клиента
+• Продукт/услуги клиента
+• WOW-эффект от встречи
+• Договоренности по КП
+
+⏳ <b>Время обработки:</b> 1-2 минуты"""
+
+        send_telegram_message(chat_id, analyze_message)
+        log_operation(chat_id, "analyze_started", {"user_name": user_name})
+        
+    except Exception as e:
+        log.error(f"Ошибка начала анализа для чата {chat_id}: {e}")
+        send_telegram_message(chat_id, "❌ Ошибка при запуске анализа. Попробуйте позже.")
+        notify_admin(f"Ошибка начала анализа для {user_name} ({chat_id}): {e}")
+
+def handle_cancel(chat_id: int, user_name: str) -> None:
+    """Обработка команды /cancel"""
+    session = get_session(chat_id)
+    if session and session.get('state') != 'IDLE':
+        clear_session(chat_id)
+        send_telegram_message(chat_id, "✅ Текущая операция отменена.")
+        log_operation(chat_id, "operation_cancelled", {
+            "user_name": user_name,
+            "previous_state": session.get('state')
+        })
+    else:
+        send_telegram_message(chat_id, "ℹ️ Нет активных операций для отмены.")
+
+def process_transcript(chat_id: int, transcript_text: str, user_name: str) -> None:
+    """Обработка полученной транскрипции"""
+    try:
+        # Валидация текста
+        if len(transcript_text.strip()) < 100:
+            send_telegram_message(chat_id, "❌ Текст слишком короткий. Нужно минимум 100 символов для анализа.")
+            return
+        
+        # Обновляем состояние и сохраняем транскрипт
+        set_session(chat_id, {
+            'state': STATE_WAIT_LEAD_ID,
+            'transcript': transcript_text[:10000],  # Ограничиваем размер
+            'created_at': datetime.now().isoformat(),
+            'user_name': user_name
+        })
+        
+        send_telegram_message(chat_id, 
+            "✅ Текст получен! Теперь пришлите ID лида из Bitrix24.\n\n"
+            "🔹 ID лида можно найти в карточке лида в Bitrix24\n"
+            "🔹 Обычно это число в адресной строке или в информации о лиде\n"
+            "🔹 Пример: https://company.bitrix24.ru/crm/lead/details/12345/ - ID = 12345"
+        )
+        log_operation(chat_id, "transcript_received", {
+            "text_length": len(transcript_text),
+            "user_name": user_name
+        })
+        
+    except Exception as e:
+        log.error(f"Ошибка обработки транскрипта для чата {chat_id}: {e}")
+        send_telegram_message(chat_id, "❌ Ошибка обработки текста. Попробуйте еще раз.")
+        clear_session(chat_id)
+
+def process_lead_id(chat_id: int, lead_id_input: str, user_name: str) -> None:
+    """Обработка полученного ID лида"""
+    try:
+        # Валидация ID лида
+        if not validate_lead_id(lead_id_input):
+            send_telegram_message(chat_id, 
+                "❌ Неверный формат ID лида. \n\n"
+                "🔹 ID должен быть числом (например: 12345)\n"
+                "🔹 Проверьте правильность ввода\n"
+                "🔹 Попробуйте еще раз или используйте /cancel для отмены"
+            )
+            return
+        
+        lead_id = int(lead_id_input.strip())
+        session = get_session(chat_id)
+        
+        if not session or 'transcript' not in session:
+            send_telegram_message(chat_id, "❌ Сессия устарела. Начните заново с /analyze")
+            clear_session(chat_id)
+            return
+        
+        # Переходим в состояние обработки
+        set_session(chat_id, {
+            'state': STATE_PROCESSING,
+            'transcript': session['transcript'],
+            'lead_id': lead_id,
+            'started_at': datetime.now().isoformat(),
+            'user_name': user_name
+        })
+        
+        # Запускаем обработку в фоновом режиме
+        send_telegram_message(chat_id, 
+            f"⏳ <b>Начинаю анализ...</b>\n\n"
+            f"• Лид ID: {lead_id}\n"
+            f"• Длина текста: {len(session['transcript'])} символов\n"
+            f"• Ожидайте результат (1-3 минуты)"
+        )
+        
+        # Запускаем асинхронную обработку
+        import threading
+        thread = threading.Thread(
+            target=process_analysis,
+            args=(chat_id, session['transcript'], lead_id, user_name)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        log_operation(chat_id, "analysis_started", {
+            "lead_id": lead_id,
+            "text_length": len(session['transcript']),
+            "user_name": user_name
+        })
+        
+    except Exception as e:
+        log.error(f"Ошибка обработки ID лида для чата {chat_id}: {e}")
+        send_telegram_message(chat_id, "❌ Ошибка обработки ID лида. Попробуйте еще раз.")
+        clear_session(chat_id)
+
+def process_analysis(chat_id: int, transcript: str, lead_id: int, user_name: str) -> None:
+    """Фоновая обработка анализа"""
+    try:
+        log.info(f"Начало анализа для лида {lead_id}, чат {chat_id}")
+        
+        # Анализ транскрипта
+        analysis_result = analyze_transcript_structured(transcript)
+        
+        if not analysis_result or 'error' in analysis_result:
+            error_msg = analysis_result.get('error', 'Неизвестная ошибка анализа')
+            send_telegram_message(chat_id, f"❌ Ошибка анализа: {error_msg}")
+            log_operation(chat_id, "analysis_failed", {
+                "lead_id": lead_id,
+                "error": error_msg,
+                "user_name": user_name
+            })
+            clear_session(chat_id)
+            return
+        
+        # Обновление лида в Bitrix24
+        update_result = update_lead_comprehensive(lead_id, analysis_result)
+        
+        if not update_result.get('success', False):
+            error_msg = update_result.get('error', 'Неизвестная ошибка обновления')
+            send_telegram_message(chat_id, f"❌ Ошибка обновления лида: {error_msg}")
+            log_operation(chat_id, "update_failed", {
+                "lead_id": lead_id,
+                "error": error_msg,
+                "analysis_data": analysis_result,
+                "user_name": user_name
+            })
+            clear_session(chat_id)
+            return
+        
+        # Создаем сводку анализа
+        analysis_summary = create_analysis_summary(analysis_result)
+        
+        # Отправляем результат пользователю
+        result_message = format_analysis_message(analysis_summary, analysis_result)
+        send_telegram_message(chat_id, result_message)
+        
+        # Дополнительная информация
+        send_telegram_message(chat_id,
+            f"✅ <b>Лид успешно обновлен!</b>\n\n"
+            f"🔗 <a href='{BITRIX_WEBHOOK_URL.replace('/rest/', '/crm/lead/details/')}{lead_id}/'>Открыть лид в Bitrix24</a>\n\n"
+            f"📊 Обновлено полей: {update_result.get('updated_fields', 0)}\n"
+            f"⏱ Время обработки: {update_result.get('processing_time', 0):.1f}с"
+        )
+        
+        log_operation(chat_id, "analysis_completed", {
+            "lead_id": lead_id,
+            "updated_fields": update_result.get('updated_fields', 0),
+            "processing_time": update_result.get('processing_time', 0),
+            "user_name": user_name,
+            "analysis_data": {k: v for k, v in analysis_result.items() if v is not None}
+        })
+        
+        # Уведомление администратора об успешном анализе
+        notify_admin(f"✅ Успешный анализ для {user_name} (Лид {lead_id}, полей: {update_result.get('updated_fields', 0)})")
+        
+    except Exception as e:
+        log.error(f"Критическая ошибка обработки анализа для чата {chat_id}: {e}")
+        send_telegram_message(chat_id, "❌ Критическая ошибка при обработке. Администратор уведомлен.")
+        notify_admin(f"🚨 Критическая ошибка анализа для {user_name} (чат {chat_id}, лид {lead_id}): {e}", urgent=True)
+        log_operation(chat_id, "analysis_critical_error", {
+            "lead_id": lead_id,
+            "error": str(e),
+            "user_name": user_name
+        })
+    finally:
+        clear_session(chat_id)
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Обработка входящих webhook-запросов от Telegram"""
+    try:
+        data = request.get_json()
+        if not data:
+            log.warning("Пустой webhook запрос")
+            return jsonify({"status": "error", "message": "Empty request"}), 400
+        
+        log.debug(f"Received webhook: {json.dumps(data, ensure_ascii=False)[:500]}")
+        
+        # Обработка сообщения
+        if 'message' in data:
+            message = data['message']
+            chat_id = message['chat']['id']
+            user_name = message['from'].get('first_name', 'Unknown')
+            text = message.get('text', '').strip()
+            
+            # Логирование входящего сообщения
+            log_operation(chat_id, "message_received", {
+                "text": text[:200],
+                "user_name": user_name,
+                "message_id": message.get('message_id')
+            })
+            
+            # Проверка команд администратора
+            if text in ADMIN_COMMANDS:
+                if handle_admin_command(chat_id, text, user_name):
+                    return jsonify({"status": "ok"})
+            
+            # Получение текущей сессии
+            session = get_session(chat_id)
+            current_state = session.get('state', 'IDLE') if session else 'IDLE'
+            
+            # Обработка команд
+            if text == '/start':
+                handle_start(chat_id, user_name)
+                
+            elif text == '/help':
+                handle_help(chat_id, user_name)
+                
+            elif text == '/analyze':
+                handle_analyze(chat_id, user_name)
+                
+            elif text == '/cancel':
+                handle_cancel(chat_id, user_name)
+                
+            elif text == '/status':
+                health_info = health_check()
+                status_msg = "✅ Система работает нормально" if health_info['status'] == 'healthy' else "⚠️ Есть проблемы с системой"
+                send_telegram_message(chat_id, f"{status_msg}\nИспользуйте /health для детальной информации")
+                
+            # Обработка состояний
+            elif current_state == STATE_WAIT_TRANSCRIPT:
+                process_transcript(chat_id, text, user_name)
+                
+            elif current_state == STATE_WAIT_LEAD_ID:
+                process_lead_id(chat_id, text, user_name)
+                
+            elif current_state == STATE_PROCESSING:
+                send_telegram_message(chat_id, "⏳ Идет обработка предыдущего запроса. Подождите завершения.")
+                
+            else:
+                # Стандартный ответ на неизвестные сообщения
+                send_telegram_message(chat_id,
+                    "🤖 <b>Не понимаю команду</b>\n\n"
+                    "Используйте /analyze для начала анализа встречи\n"
+                    "или /help для получения справки по командам"
+                )
+        
+        return jsonify({"status": "ok"})
+        
+    except Exception as e:
+        log.error(f"Ошибка обработки webhook: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/health', methods=['GET'])
+def health_endpoint():
+    """Endpoint для проверки здоровья сервиса"""
+    try:
+        health_info = health_check()
+        return jsonify(health_info), 200 if health_info['status'] == 'healthy' else 503
+    except Exception as e:
+        log.error(f"Ошибка health check: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/setup-webhook', methods=['POST'])
+def setup_webhook():
+    """Установка webhook для Telegram"""
+    try:
+        payload = {
+            "url": WEBHOOK_URL,
+            "drop_pending_updates": True
+        }
+        
+        response = requests.post(
+            f"{TELEGRAM_API_URL}/setWebhook",
+            json=payload,
+            timeout=10
+        )
+        response.raise_for_status()
+        
+        result = response.json()
+        if result.get('ok'):
+            log.info(f"Webhook установлен: {WEBHOOK_URL}")
+            return jsonify({"status": "success", "result": result})
+        else:
+            log.error(f"Ошибка установки webhook: {result}")
+            return jsonify({"status": "error", "result": result}), 500
+            
+    except Exception as e:
+        log.error(f"Ошибка установки webhook: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/')
+def index():
+    """Корневой endpoint"""
+    return jsonify({
+        "status": "running",
+        "service": "Telegram Meeting Analysis Bot",
+        "version": "1.0.0",
+        "environment": NODE_ENV,
+        "timestamp": datetime.now().isoformat()
+    })
+
+if __name__ == '__main__':
+    # Проверка соединений при запуске
+    try:
+        log.info("Запуск приложения...")
+        
+        # Проверка здоровья сервисов
+        health = health_check()
+        log.info(f"Статус здоровья: {health['status']}")
+        
+        # Установка webhook в production
+        if NODE_ENV == 'production':
+            setup_webhook()
+            log.info("Production mode: Webhook configured")
+        else:
+            log.info("Development mode: Polling can be used")
+        
+        # Запуск Flask приложения
+        app.run(
+            host='0.0.0.0',
+            port=PORT,
+            debug=(NODE_ENV == 'development'),
+            use_reloader=False
+        )
+        
+    except Exception as e:
+        log.critical(f"Критическая ошибка запуска приложения: {e}")
+        raise
