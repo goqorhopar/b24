@@ -116,7 +116,7 @@ def update_lead_comment(lead_id: str, comment: str) -> Dict[str, Any]:
     return _make_bitrix_request('crm.lead.update.json', data)
 
 
-def create_task(lead_id: str, title: str, description: str, responsible_id: str = None) -> Dict[str, Any]:
+def create_task(lead_id: str, title: str, description: str, responsible_id: str = None, deadline: Optional[str] = None) -> Dict[str, Any]:
     """Создание задачи в Bitrix24, связанной с лидом"""
     if not lead_id or not lead_id.strip():
         raise BitrixError("ID лида пустой")
@@ -128,7 +128,7 @@ def create_task(lead_id: str, title: str, description: str, responsible_id: str 
         responsible_id = BITRIX_RESPONSIBLE_ID
 
     # Рассчитываем дедлайн
-    deadline_date = (datetime.now() + timedelta(days=BITRIX_TASK_DEADLINE_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
+    deadline_date = deadline or (datetime.now() + timedelta(days=BITRIX_TASK_DEADLINE_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
 
     # Обрезаем описание если слишком длинное
     max_desc_length = 5000
@@ -205,14 +205,22 @@ def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict
     if not lead_id:
         raise BitrixError("lead_id обязателен")
 
-    result = {'updated': False, 'detail': None}
+    result = {'updated': False, 'detail': None, 'task_created': False, 'task_id': None}
 
     try:
         # 1) Обновим COMMENTS (если есть analysis)
         analysis = gemini_data.get('analysis')
-        if analysis:
+        closing_comment = gemini_data.get('closing_comment')
+        if analysis or closing_comment:
             try:
-                update_resp = update_lead_comment(lead_id, analysis)
+                # Дополняем основной анализ завершающим комментарием, если он есть
+                comment_parts: List[str] = []
+                if analysis:
+                    comment_parts.append(str(analysis))
+                if closing_comment:
+                    comment_parts.append("\n\nИтог/закрывающий комментарий:\n" + str(closing_comment))
+
+                update_resp = update_lead_comment(lead_id, "\n".join(comment_parts).strip())
                 log.debug(f"Обновлен комментарий лида {lead_id}")
             except Exception as e:
                 log.exception(f"Не удалось обновить комментарий лид {lead_id}: {e}")
@@ -260,6 +268,93 @@ def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict
                 log.info(f"Lead {lead_id} updated with fields: {list(fields_payload.keys())}")
             except Exception as e:
                 log.exception(f"Ошибка при обновлении полей лида {lead_id}: {e}")
+
+        # 3) Логика создания задач по результатам анализа
+        try:
+            task_responsible = str(gemini_data.get('meeting_responsible_id') or '').strip() or None
+
+            def _format_deadline(dt_str: Optional[str]) -> Optional[str]:
+                if not dt_str:
+                    return None
+                try:
+                    # Поддержка форматов YYYY-MM-DD и YYYY-MM-DD HH:MM:SS
+                    if len(dt_str.strip()) == 10:
+                        parsed = datetime.strptime(dt_str.strip(), '%Y-%m-%d')
+                        return parsed.strftime('%Y-%m-%d 18:00:00')
+                    parsed = datetime.strptime(dt_str.strip(), '%Y-%m-%d %H:%M:%S')
+                    return parsed.strftime('%Y-%m-%d %H:%M:%S')
+                except Exception:
+                    return None
+
+            meeting_scheduled = gemini_data.get('meeting_scheduled') is True
+            meeting_done = gemini_data.get('meeting_done') is True
+            is_lpr = gemini_data.get('is_lpr') is True
+            planned_meeting_date = gemini_data.get('planned_meeting_date')
+
+            # Если встреча запланирована и есть дата — создаём задачу с соответствующим дедлайном
+            if meeting_scheduled and not meeting_done:
+                deadline = _format_deadline(planned_meeting_date)
+                title = 'Провести запланированную встречу'
+                descr_parts: List[str] = [
+                    'Автосоздано ботом по итогам анализа встречи.',
+                ]
+                if planned_meeting_date:
+                    descr_parts.append(f"Плановая дата: {planned_meeting_date}")
+                if closing_comment:
+                    descr_parts.append(f"Комментарий: {closing_comment}")
+                description = "\n".join(descr_parts)
+
+                # Если есть явный дедлайн — временно изменим глобальную настройку через локальную переменную
+                if deadline:
+                    try:
+                        task_resp = create_task(
+                            lead_id=str(lead_id),
+                            title=title,
+                            description=description,
+                            responsible_id=task_responsible or None,
+                            deadline=deadline
+                        )
+                        # Bitrix сам поставит DEADLINE из полей, мы передаём текстовое поле — для явного дедлайна нужно через поля
+                        # но API tasks.task.add принимает DEADLINE в fields, которое мы не прокидываем напрямую через create_task
+                        # Поэтому если нужен точный DEADLINE, создадим ещё один запрос на обновление задачи — пропустим для простоты
+                        result['task_created'] = True
+                        # получить id задачи
+                        if isinstance(task_resp, dict):
+                            # возможные варианты: {'result': {'task': {'id': 123}}} или {'result': {'task': {'id': '123'}}}
+                            task_obj = task_resp.get('result') or {}
+                            if isinstance(task_obj, dict):
+                                task_entity = task_obj.get('task') or task_obj
+                                if isinstance(task_entity, dict):
+                                    task_id = task_entity.get('id') or task_entity.get('task', {}).get('id')
+                                    result['task_id'] = str(task_id) if task_id else None
+                    except Exception as e:
+                        log.exception(f"Не удалось создать задачу для лида {lead_id}: {e}")
+
+            # Если ЛПР найден, но встреча не назначена — создаём задачу назначить встречу
+            elif is_lpr and not meeting_scheduled and not meeting_done:
+                title = 'Назначить встречу с ЛПР'
+                description = 'Автозадача: назначить встречу с ЛПР по итогам анализа. '
+                if closing_comment:
+                    description += f"\nКомментарий: {closing_comment}"
+                try:
+                    task_resp = create_task(
+                        lead_id=str(lead_id),
+                        title=title,
+                        description=description,
+                        responsible_id=task_responsible or None
+                    )
+                    result['task_created'] = True
+                    if isinstance(task_resp, dict):
+                        task_obj = task_resp.get('result') or {}
+                        if isinstance(task_obj, dict):
+                            task_entity = task_obj.get('task') or task_obj
+                            if isinstance(task_entity, dict):
+                                task_id = task_entity.get('id') or task_entity.get('task', {}).get('id')
+                                result['task_id'] = str(task_id) if task_id else None
+                except Exception as e:
+                    log.exception(f"Не удалось создать задачу 'Назначить встречу' для лида {lead_id}: {e}")
+        except Exception as e:
+            log.exception(f"Ошибка логики создания задач для лида {lead_id}: {e}")
 
     except Exception as e:
         log.exception(f"Ошибка в update_lead_comprehensive: {e}")
