@@ -25,9 +25,12 @@ log = logging.getLogger(__name__)
 
 # Конфигурация из окружения
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-1.5-pro")
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 RETRY_DELAY = float(os.getenv("RETRY_DELAY", "2"))
+TEMPERATURE = float(os.getenv("GEMINI_TEMPERATURE", "0.1"))
+TOP_P = float(os.getenv("GEMINI_TOP_P", "0.2"))
+MAX_OUTPUT_TOKENS_DEFAULT = int(os.getenv("GEMINI_MAX_TOKENS", "1200"))
 
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY не найден в переменных окружения!")
@@ -95,45 +98,34 @@ def _build_analysis_prompt(transcript: str) -> str:
     """
     current_date = datetime.now().strftime("%d.%m.%Y")
     prompt = (
-        f"Ты — эксперт-аналитик продаж. Сегодня {current_date}.\n\n"
-        "ЗАДАЧА: Проанализируй транскрипт и верни ТОЛЬКО JSON-объект со всеми полями (отсутствующие — null).\n\n"
-        "Структура JSON:\n"
+        f"ИНСТРУКЦИЯ ДЛЯ GEMINI (Промпт)\n"
+        f"Роль: Ты — эксперт-аналитик по продажам и переговорам. Сегодня {current_date}.\n"
+        "Твоя задача — проанализировать транскрипт встречи менеджера с клиентом, дать развернутую оценку по 12 пунктам чек-листа и, что важнее всего, сгенерировать структурированный JSON-объект с данными для автоматического обновления карточки лида и создания задач в CRM Bitrix24.\n\n"
+        "ИНСТРУКЦИЯ:\n"
+        "1) Внимательно проанализируй предоставленную транскрипцию.\n"
+        "2) Сформируй один JSON-объект, содержащий два блока: analysis_report (текстовый отчёт) и bitrix24_update (структурированные данные для CRM).\n"
+        "3) Верни строго валидный JSON без какого-либо дополнительного текста.\n\n"
+        "ФОРМАТ ОТВЕТА:\n"
         "{\n"
-        "  \"analysis\": string,\n"
-        "  \"key_request\": string,\n"
-        "  \"pains_text\": string,\n"
-        "  \"budget_value\": number,\n"
-        "  \"budget_currency\": string,\n"
-        "  \"timeline_text\": string,\n"
-        "  \"goal_text\": string,\n"
-        "  \"client_name\": string,\n"
-        "  \"client_last_name\": string,\n"
-        "  \"position\": string,\n"
-        "  \"company_title\": string,\n"
-        "  \"product\": string,\n"
-        "  \"task_formulation\": string,\n"
-        "  \"ad_budget\": string,\n"
-        "  \"closing_comment\": string,\n"
-        "  \"is_lpr\": boolean,\n"
-        "  \"meeting_scheduled\": boolean,\n"
-        "  \"meeting_done\": boolean,\n"
-        "  \"client_type_text\": string,\n"
-        "  \"bad_reason_text\": string,\n"
-        "  \"kp_done_text\": string,\n"
-        "  \"lpr_confirmed_text\": string,\n"
-        "  \"source_id_code\": string,\n"
-        "  \"source_id_text\": string,\n"
-        "  \"source_text\": string,\n"
-        "  \"our_product_text\": string,\n"
-        "  \"meeting_date\": string (YYYY-MM-DD),\n"
-        "  \"planned_meeting_date\": string (YYYY-MM-DD HH:MM:SS),\n"
-        "  \"meeting_responsible_id\": number,\n"
-        "  \"sentiment\": string (one of: interested, doubtful, rushed, neutral),\n"
-        "  \"next_action\": string (one of: call, send_kp, schedule_demo, none),\n"
-        "  \"next_action_comment\": string\n"
+        "  \"analysis_report\": \"...подробный отчёт по 12 пунктам...\",\n"
+        "  \"bitrix24_update\": {\n"
+        "    \"fields_to_update\": {\n"
+        "      \"COMMENTS\": \"строка\",\n"
+        "      \"TITLE\": \"строка или null\",\n"
+        "      \"NAME\": \"строка или null\",\n"
+        "      \"LAST_NAME\": \"строка или null\",\n"
+        "      \"COMPANY_TITLE\": \"строка или null\",\n"
+        "      \"ASSIGNED_BY_ID\": number или null,\n"
+        "      \"UF_*\": \"значения пользовательских полей, если применимо\"\n"
+        "    },\n"
+        "    \"tasks_to_create\": [\n"
+        "      { \"title\": \"строка\", \"description\": \"строка\", \"deadline\": \"YYYY-MM-DD или YYYY-MM-DD HH:MM:SS\", \"responsible_id\": number }\n"
+        "    ],\n"
+        "    \"lead_category\": \"A|B|C\"\n"
+        "  }\n"
         "}\n\n"
-        "Правила: boolean — true/false/null; строки — строки или null; числа — number или null; даты — в указанном формате.\n"
-        "Верни строго JSON без пояснений.\n\n"
+        "ЧЕК-ЛИСТ (включить разбор в analysis_report): 1) Бизнес клиента 2) Боли/потребности 3) Возражения 4) Реакция на модель генерации 5) Особый интерес 6) Возможности 7) Ошибки менеджера 8) Путь к закрытию 9) Тон беседы 10) Контроль диалога 11) Рекомендации 12) Категория клиента.\n\n"
+        "Строгие требования: Всегда возвращай один корректный JSON с указанной структурой.\n\n"
         "ТРАНСКРИПТ:\n```\n" + transcript.strip() + "\n```\n"
     )
     return prompt
@@ -246,7 +238,7 @@ def validate_gemini_output(data: Dict[str, Any]) -> Dict[str, Any]:
 
 # ---- Вызов модели: универсальный и надёжный ----
 
-def _call_gemini(prompt: str, model: Optional[str] = None, max_tokens: int = 1200) -> str:
+def _call_gemini(prompt: str, model: Optional[str] = None, max_tokens: int = MAX_OUTPUT_TOKENS_DEFAULT) -> str:
     """
     Умный обёртывающий вызов Gemini с ретраями.
     Попробует несколько возможных путей вызова в зависимости от версии библиотеки:
@@ -270,7 +262,12 @@ def _call_gemini(prompt: str, model: Optional[str] = None, max_tokens: int = 120
                     if hasattr(model_obj, "generate_content"):
                         resp = model_obj.generate_content(
                             prompt,
-                            generation_config={"max_output_tokens": max_tokens},
+                            generation_config={
+                                "max_output_tokens": max_tokens,
+                                "temperature": TEMPERATURE,
+                                "top_p": TOP_P,
+                                "response_mime_type": "application/json"
+                            },
                             safety_settings=SAFETY_SETTINGS or None
                         )
                         # возращаем текст — в разных версиях может быть .text или .output
@@ -307,7 +304,7 @@ def _call_gemini(prompt: str, model: Optional[str] = None, max_tokens: int = 120
             if hasattr(genai, "generate_text"):
                 try:
                     func = getattr(genai, "generate_text")
-                    resp = func(model=model, prompt=prompt, max_output_tokens=max_tokens)
+                    resp = func(model=model, prompt=prompt, max_output_tokens=max_tokens, temperature=TEMPERATURE, top_p=TOP_P)
                     # обработка возможных структур
                     if isinstance(resp, dict):
                         if "candidates" in resp and resp["candidates"]:
@@ -356,7 +353,7 @@ def _call_gemini(prompt: str, model: Optional[str] = None, max_tokens: int = 120
                 # Попробуем привести названия к REST-идиомам, если указана укороченная форма
                 # Например: "gemini-1.5" -> "gemini-1.5-flash" (более доступная модель)
                 if rest_model in (None, "gemini-1.5"):
-                    rest_model = "gemini-1.5-flash"
+                    rest_model = MODEL_NAME
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{rest_model}:generateContent?key={api_key}"
                 payload: Dict[str, Any] = {
                     "contents": [
@@ -365,7 +362,12 @@ def _call_gemini(prompt: str, model: Optional[str] = None, max_tokens: int = 120
                             "parts": [{"text": prompt}]
                         }
                     ],
-                    "generationConfig": {"maxOutputTokens": max_tokens}
+                    "generationConfig": {
+                        "maxOutputTokens": max_tokens,
+                        "temperature": TEMPERATURE,
+                        "topP": TOP_P,
+                        "responseMimeType": "application/json"
+                    }
                 }
                 headers = {"Content-Type": "application/json"}
                 r = requests.post(url, headers=headers, json=payload, timeout=30)
@@ -419,13 +421,20 @@ def analyze_transcript_structured(transcript: str) -> Dict[str, Any]:
         safe_txt = sanitize_transcript_for_safety(transcript)
         prompt = _build_analysis_prompt(safe_txt)
 
-        raw = _call_gemini(prompt, model=MODEL_NAME, max_tokens=1200)
+        raw = _call_gemini(prompt, model=MODEL_NAME, max_tokens=MAX_OUTPUT_TOKENS_DEFAULT)
         if not raw:
             log.warning("Gemini вернул пустой ответ")
             return {"analysis": "Пустой ответ от модели"}
 
         parsed = extract_json_from_text(raw)
         if parsed is None:
+            # Попробуем сделать повторный краткий вызов строго под JSON
+            try:
+                strict_prompt = "Верни строго JSON по ранее заданной схеме без пояснений. Если данных нет — верни ключи со значением null.\n\nТЕКСТ:\n" + transcript.strip()
+                raw2 = _call_gemini(strict_prompt, model=MODEL_NAME, max_tokens=512)
+                parsed = extract_json_from_text(raw2)
+            except Exception:
+                parsed = None
             # Если JSON не найден — попытка взять начало ответа как анализ
             fallback_analysis = raw.strip()
             if len(fallback_analysis) > 4000:
@@ -453,6 +462,15 @@ def analyze_transcript_structured(transcript: str) -> Dict[str, Any]:
             return result
 
         validated = validate_gemini_output(parsed)
+
+        # Если модель вернула почти всё null — применим эвристику для базового заполнения
+        non_null = sum(1 for k, v in validated.items() if v not in (None, "", [], {}))
+        if non_null <= 2:
+            # Сформируем хотя бы базовый анализ из первых 700 символов транскрипта
+            base = transcript.strip()
+            if len(base) > 700:
+                base = base[:700] + "..."
+            validated["analysis"] = validated.get("analysis") or base
 
         # Если analysis не заполнён в parsed — попытка извлечь текстовую часть из raw
         if not validated.get("analysis"):
