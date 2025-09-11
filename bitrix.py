@@ -163,18 +163,20 @@ def _format_datetime(dt_str: Optional[str], default_hour: int = 18) -> Optional[
 
 def get_lead_info(lead_id: str) -> Dict[str, Any]:
     """Получение информации о лиде"""
-    if not lead_id or not lead_id.strip():
+    lead_id_str = str(lead_id).strip()
+    if not lead_id_str:
         raise BitrixError("ID лида пустой")
 
     data = {
-        'id': str(lead_id).strip()
+        'id': lead_id_str
     }
     return _make_bitrix_request('crm.lead.get.json', data)
 
 
 def update_lead_comment(lead_id: str, comment: str) -> Dict[str, Any]:
     """Обновление комментария лида"""
-    if not lead_id or not lead_id.strip():
+    lead_id_str = str(lead_id).strip()
+    if not lead_id_str:
         raise BitrixError("ID лида пустой")
     if not comment or not comment.strip():
         raise BitrixError("Комментарий пустой")
@@ -185,7 +187,7 @@ def update_lead_comment(lead_id: str, comment: str) -> Dict[str, Any]:
         log.warning(f"Комментарий для лида {lead_id} обрезан до {MAX_COMMENT_LENGTH} символов")
 
     data = {
-        'id': str(lead_id).strip(),
+        'id': lead_id_str,
         'fields': {
             'COMMENTS': comment.strip()
         },
@@ -198,7 +200,8 @@ def update_lead_comment(lead_id: str, comment: str) -> Dict[str, Any]:
 
 def create_task(lead_id: str, title: str, description: str, responsible_id: str = None, deadline: Optional[str] = None) -> Dict[str, Any]:
     """Создание задачи в Bitrix24, связанной с лидом"""
-    if not lead_id or not lead_id.strip():
+    lead_id_str = str(lead_id).strip()
+    if not lead_id_str:
         raise BitrixError("ID лида пустой")
 
     if not title or not title.strip():
@@ -228,12 +231,12 @@ def create_task(lead_id: str, title: str, description: str, responsible_id: str 
         description = description[:max_desc_length] + "\n\n[Описание обрезано]"
 
     fields: Dict[str, Any] = {
-        'TITLE': f"[Лид {lead_id}] {title}",
+        'TITLE': f"[Лид {lead_id_str}] {title}",
         'DESCRIPTION': description,
         'RESPONSIBLE_ID': responsible_id_int,
         'CREATED_BY': created_by_int,
         'DEADLINE': deadline_date,
-        'UF_CRM_TASK': [f"L_{str(lead_id).strip()}"]
+        'UF_CRM_TASK': [f"L_{lead_id_str}"]
     }
     # Приоритет: 2 — высокий
     fields['PRIORITY'] = 2
@@ -346,7 +349,7 @@ def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict
                 if closing_comment:
                     comment_parts.append("\n\nИтог/закрывающий комментарий:\n" + str(closing_comment))
 
-                update_resp = update_lead_comment(lead_id, "\n".join(comment_parts).strip())
+                update_resp = update_lead_comment(str(lead_id), "\n".join(comment_parts).strip())
                 result['comment_updated'] = True
                 log.info(f"Обновлен комментарий лида {lead_id}")
             except Exception as e:
@@ -446,7 +449,8 @@ def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict
         # 3) Логика создания задач по результатам анализа
         try:
             # Получаем ответственного за встречу или используем ответственного по лиду
-            task_responsible = str(gemini_data.get('meeting_responsible_id') or '').strip() or None
+            task_responsible_raw = gemini_data.get('meeting_responsible_id')
+            task_responsible = str(task_responsible_raw).strip() if task_responsible_raw is not None else None
             if not task_responsible:
                 # Пытаемся получить ответственного из самого лида
                 try:
@@ -479,7 +483,8 @@ def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict
             meeting_done = gemini_data.get('meeting_done')
             is_lpr = gemini_data.get('is_lpr')
             planned_meeting_date = gemini_data.get('planned_meeting_date')
-            kp_done_text = gemini_data.get('kp_done_text', '').strip().lower()
+            kp_raw = gemini_data.get('kp_done_text')
+            kp_done_text = str(kp_raw).strip().lower() if kp_raw is not None else ''
             
             # Приводим к булевому типу
             meeting_scheduled = meeting_scheduled is True or (isinstance(meeting_scheduled, str) and meeting_scheduled.lower() in ('1', 'true', 'yes', 'да'))
