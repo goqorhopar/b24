@@ -265,4 +265,4 @@ def handle_admin_command(chat_id: int, command: str, user_name: str) -> bool:
             health_info = health_check()
             
             status_emoji = "✅" if health_info['status'] == 'healthy' else "❌"
-            health_message = f"""{status_emoji}"""
+            health_message = f"""{status_emoji}
