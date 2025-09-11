@@ -481,8 +481,28 @@ def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict
             try:
                 # Дополняем основной анализ завершающим комментарием, если он есть
                 comment_parts: List[str] = []
-                if analysis:
-                    comment_parts.append(str(analysis))
+                # Сформируем структурированный комментарий по шаблону
+                key_request = gemini_data.get('key_request') or ''
+                pains_text = gemini_data.get('pains_text') or ''
+                sentiment = gemini_data.get('sentiment') or ''
+                budget_value = gemini_data.get('budget_value')
+                budget_currency = gemini_data.get('budget_currency') or ''
+                timeline_text = gemini_data.get('timeline_text') or ''
+                transcript = gemini_data.get('analysis') or ''
+
+                budget_line = f"{budget_value} {budget_currency}" if budget_value else (gemini_data.get('ad_budget') or '')
+
+                structured = (
+                    "**Краткая сводка по лиду:**\n"
+                    "*   **Источник:** Разговор с менеджером\n"
+                    f"*   **Ключевой запрос:** {key_request}\n"
+                    f"*   **Основные боли:** {pains_text}\n"
+                    f"*   **Бюджет/Сроки:** {budget_line} / {timeline_text}\n"
+                    f"*   **Настроение клиента:** {sentiment}\n\n"
+                    "**Транскрипт разговора:**\n"
+                    f"{transcript}"
+                )
+                comment_parts.append(structured)
                 if closing_comment:
                     comment_parts.append("\n\nИтог/закрывающий комментарий:\n" + str(closing_comment))
 
@@ -628,7 +648,7 @@ def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict
             except Exception as e:
                 log.exception(f"Ошибка при обновлении полей лида {lead_id}: {e}")
 
-        # 3) Логика создания задач по результатам анализа
+        # 3) Логика создания задач по результатам анализа (цепочка из 3 шагов)
         try:
             # Получаем ответственного за встречу или используем ответственного по лиду
             task_responsible_raw = gemini_data.get('meeting_responsible_id')
@@ -681,7 +701,62 @@ def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict
             task_created = False
             task_title = ""
             
-            # ЗАДАЧА 1: Если встреча запланирована, но не проведена
+            # ЗАДАЧА 1: Первичная обработка и верификация — всегда создаём
+            step1_deadline = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
+            step1_descr = "Проверить корректность данных по лиду, заполненных ботом. Уточнить у клиента недостающие данные при необходимости. Подтвердить контакт."
+            try:
+                step1_resp = create_task(
+                    lead_id=str(lead_id),
+                    title='Первичная обработка и верификация',
+                    description=step1_descr,
+                    responsible_id=task_responsible,
+                    deadline=step1_deadline
+                )
+                result['task_created'] = True
+                result['task_details'] = step1_resp
+            except Exception as e:
+                log.exception(f"Ошибка создания Задачи 1 для лида {lead_id}: {e}")
+
+            # ЗАДАЧА 2: Подготовка коммерческого предложения — через 2 дня после шага 1
+            pains_text = gemini_data.get('pains_text') or ''
+            step2_deadline = (datetime.now() + timedelta(days=3)).strftime('%Y-%m-%d %H:%M:%S')
+            step2_descr = f"На основе данных из лида и транскрипта подготовить КП, сфокусировавшись на решении проблем: {pains_text}. Согласовать с отделом продукта."
+            try:
+                step2_resp = create_task(
+                    lead_id=str(lead_id),
+                    title='Подготовка коммерческого предложения',
+                    description=step2_descr,
+                    responsible_id=task_responsible,
+                    deadline=step2_deadline
+                )
+                result['task_created'] = True
+                result['task_details'] = step2_resp
+            except Exception as e:
+                log.exception(f"Ошибка создания Задачи 2 для лида {lead_id}: {e}")
+
+            # ЗАДАЧА 3: Организация демо-звонка — через 1 день после шага 2
+            client_display = ' '.join(filter(None, [str(gemini_data.get('client_name') or '').strip(), str(gemini_data.get('client_last_name') or '').strip()])).strip()
+            step3_deadline = (datetime.now() + timedelta(days=4)).strftime('%Y-%m-%d %H:%M:%S')
+            step3_descr = f"Связаться с клиентом {client_display} и назначить демонстрацию продукта на удобное время. Ответить на вопросы."
+            try:
+                step3_resp = create_task(
+                    lead_id=str(lead_id),
+                    title='Организация демо-звонка',
+                    description=step3_descr,
+                    responsible_id=task_responsible,
+                    deadline=step3_deadline
+                )
+                result['task_created'] = True
+                result['task_details'] = step3_resp
+            except Exception as e:
+                log.exception(f"Ошибка создания Задачи 3 для лида {lead_id}: {e}")
+
+            # Дополнительно: контекстные задачи по фактам встречи (если уместно)
+            # ЗАДАЧА: Если встреча запланирована и не проведена — провести
+            # ЗАДАЧА: Если ЛПР найден, но встреча не назначена — назначить
+            # ЗАДАЧА: Если встреча проведена, но КП не сделано — подготовить КП
+
+            # ЗАДАЧА A: Если встреча запланирована, но не проведена
             if meeting_scheduled and not meeting_done:
                 deadline = _format_deadline(planned_meeting_date)
                 task_title = 'Провести запланированную встречу'
@@ -710,7 +785,7 @@ def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict
                 except Exception as e:
                     log.exception(f"Ошибка создания задачи 'Провести встречу' для лида {lead_id}: {e}")
 
-            # ЗАДАЧА 2: Если ЛПР найден, но встреча не назначена и не проведена
+            # ЗАДАЧА B: Если ЛПР найден, но встреча не назначена и не проведена
             elif is_lpr and not meeting_scheduled and not meeting_done:
                 task_title = 'Назначить встречу с ЛПР'
                 descr_parts = [
@@ -735,7 +810,7 @@ def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict
                 except Exception as e:
                     log.exception(f"Ошибка создания задачи 'Назначить встречу' для лида {lead_id}: {e}")
             
-            # ЗАДАЧА 3: Если встреча проведена, но КП не сделано
+            # ЗАДАЧА C: Если встреча проведена, но КП не сделано
             elif meeting_done and not kp_done:
                 task_title = 'Подготовить коммерческое предложение'
                 descr_parts = [
