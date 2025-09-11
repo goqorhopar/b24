@@ -119,12 +119,33 @@ def _enum_id_by_label(field_code: str, label_value: Any) -> Optional[str]:
         return None
 
     val_norm = str(label_value).strip().lower()
+    # 1) Точное совпадение
     for it in items:
         if isinstance(it, dict) and str(it.get('VALUE', '')).strip().lower() == val_norm:
             return str(it.get('ID')) if it.get('ID') is not None else None
+    # 2) Начало/вхождение
     for it in items:
-        if isinstance(it, dict) and val_norm in str(it.get('VALUE', '')).strip().lower():
+        v = str(it.get('VALUE', '')).strip().lower()
+        if val_norm.startswith(v) or v.startswith(val_norm) or (val_norm in v) or (v in val_norm):
             return str(it.get('ID')) if it.get('ID') is not None else None
+    # 3) Простая токен-метрика пересечения слов
+    try:
+        text_tokens = set(t for t in val_norm.replace(',', ' ').split() if t)
+        best_id = None
+        best_score = 0.0
+        for it in items:
+            v = str(it.get('VALUE', '')).strip().lower()
+            opt_tokens = set(t for t in v.replace(',', ' ').split() if t)
+            inter = len(text_tokens & opt_tokens)
+            union = len(text_tokens | opt_tokens) or 1
+            score = inter / union
+            if score > best_score:
+                best_score = score
+                best_id = str(it.get('ID')) if it.get('ID') is not None else None
+        if best_id and best_score >= 0.2:
+            return best_id
+    except Exception:
+        pass
     return None
 
 
@@ -214,10 +235,7 @@ def create_task(lead_id: str, title: str, description: str, responsible_id: str 
         responsible_id_int = int(str(responsible_id).strip())
     except Exception:
         raise BitrixError(f"RESPONSIBLE_ID некорректен: {responsible_id}")
-    try:
-        created_by_int = int(str(BITRIX_CREATED_BY_ID).strip())
-    except Exception:
-        created_by_int = responsible_id_int
+    # CREATED_BY задаётся автоматически вебхуком; не устанавливаем вручную
 
     # Рассчитываем дедлайн
     if deadline:
@@ -234,7 +252,6 @@ def create_task(lead_id: str, title: str, description: str, responsible_id: str 
         'TITLE': f"[Лид {lead_id_str}] {title}",
         'DESCRIPTION': description,
         'RESPONSIBLE_ID': responsible_id_int,
-        'CREATED_BY': created_by_int,
         'DEADLINE': deadline_date,
         'UF_CRM_TASK': [f"L_{lead_id_str}"]
     }
@@ -247,7 +264,7 @@ def create_task(lead_id: str, title: str, description: str, responsible_id: str 
     log.info(f"Данные задачи: {json.dumps(data, ensure_ascii=False)}")
     
     try:
-        resp = _make_bitrix_request('tasks.task.add', data)
+        resp = _make_bitrix_request('tasks.task.add.json', data)
         log.info(f"Результат создания задачи для лида {lead_id}: {json.dumps(resp, ensure_ascii=False)}")
         return resp
     except Exception as e:
