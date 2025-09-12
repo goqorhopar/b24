@@ -176,8 +176,8 @@ def _extract_entities_from_analysis(text: Optional[str]) -> Dict[str, Optional[s
                     result['company_title'] = name.strip()[:255]
                     break
 
-        # 2) Имя Фамилия (русские буквы)
-        m_name = re.search(r'\b([А-ЯЁ][а-яё]+)\s+([А-ЯЁ][а-яё]+)\b', s)
+        # 2) Имя Фамилия (русские буквы), исключая менеджеров (Григорий, Виктор)
+        m_name = re.search(r'\b(?!Григорий\b|Виктор\b)([А-ЯЁ][а-яё]+)\s+([А-ЯЁ][а-яё]+)\b', s)
         if m_name:
             result['client_name'] = m_name.group(1)[:100]
             result['client_last_name'] = m_name.group(2)[:100]
@@ -467,6 +467,7 @@ def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict
         'task_created': False, 
         'task_id': None, 
         'task_details': None,
+        'tasks': [],
         'fields_updated': [],
         'comment_updated': False
     }
@@ -703,51 +704,82 @@ def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict
             
             # ЗАДАЧА 1: Первичная обработка и верификация — всегда создаём
             step1_deadline = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
+            step1_title = 'Шаг 1: Первичная обработка и верификация'
             step1_descr = "Проверить корректность данных по лиду, заполненных ботом. Уточнить у клиента недостающие данные при необходимости. Подтвердить контакт."
             try:
                 step1_resp = create_task(
                     lead_id=str(lead_id),
-                    title='Первичная обработка и верификация',
+                    title=step1_title,
                     description=step1_descr,
                     responsible_id=task_responsible,
                     deadline=step1_deadline
                 )
                 result['task_created'] = True
                 result['task_details'] = step1_resp
+                # извлечь ID
+                step1_id = None
+                try:
+                    if isinstance(step1_resp, dict) and step1_resp.get('result'):
+                        task_result = step1_resp['result']
+                        step1_id = task_result.get('id') or task_result.get('task', {}).get('id')
+                except Exception:
+                    step1_id = None
+                if step1_id:
+                    result['tasks'].append({'step': 1, 'title': step1_title, 'id': str(step1_id)})
             except Exception as e:
                 log.exception(f"Ошибка создания Задачи 1 для лида {lead_id}: {e}")
 
             # ЗАДАЧА 2: Подготовка коммерческого предложения — через 2 дня после шага 1
             pains_text = gemini_data.get('pains_text') or ''
             step2_deadline = (datetime.now() + timedelta(days=3)).strftime('%Y-%m-%d %H:%M:%S')
+            step2_title = 'Шаг 2: Подготовка коммерческого предложения'
             step2_descr = f"На основе данных из лида и транскрипта подготовить КП, сфокусировавшись на решении проблем: {pains_text}. Согласовать с отделом продукта."
             try:
                 step2_resp = create_task(
                     lead_id=str(lead_id),
-                    title='Подготовка коммерческого предложения',
+                    title=step2_title,
                     description=step2_descr,
                     responsible_id=task_responsible,
                     deadline=step2_deadline
                 )
                 result['task_created'] = True
                 result['task_details'] = step2_resp
+                step2_id = None
+                try:
+                    if isinstance(step2_resp, dict) and step2_resp.get('result'):
+                        task_result = step2_resp['result']
+                        step2_id = task_result.get('id') or task_result.get('task', {}).get('id')
+                except Exception:
+                    step2_id = None
+                if step2_id:
+                    result['tasks'].append({'step': 2, 'title': step2_title, 'id': str(step2_id)})
             except Exception as e:
                 log.exception(f"Ошибка создания Задачи 2 для лида {lead_id}: {e}")
 
             # ЗАДАЧА 3: Организация демо-звонка — через 1 день после шага 2
             client_display = ' '.join(filter(None, [str(gemini_data.get('client_name') or '').strip(), str(gemini_data.get('client_last_name') or '').strip()])).strip()
             step3_deadline = (datetime.now() + timedelta(days=4)).strftime('%Y-%m-%d %H:%M:%S')
+            step3_title = 'Шаг 3: Организация демо-звонка'
             step3_descr = f"Связаться с клиентом {client_display} и назначить демонстрацию продукта на удобное время. Ответить на вопросы."
             try:
                 step3_resp = create_task(
                     lead_id=str(lead_id),
-                    title='Организация демо-звонка',
+                    title=step3_title,
                     description=step3_descr,
                     responsible_id=task_responsible,
                     deadline=step3_deadline
                 )
                 result['task_created'] = True
                 result['task_details'] = step3_resp
+                step3_id = None
+                try:
+                    if isinstance(step3_resp, dict) and step3_resp.get('result'):
+                        task_result = step3_resp['result']
+                        step3_id = task_result.get('id') or task_result.get('task', {}).get('id')
+                except Exception:
+                    step3_id = None
+                if step3_id:
+                    result['tasks'].append({'step': 3, 'title': step3_title, 'id': str(step3_id)})
             except Exception as e:
                 log.exception(f"Ошибка создания Задачи 3 для лида {lead_id}: {e}")
 
@@ -849,6 +881,22 @@ def update_lead_comprehensive(lead_id: str, gemini_data: Dict[str, Any]) -> Dict
                             task_id = task_result.get('id') or task_result.get('task', {}).get('id')
                             result['task_id'] = str(task_id) if task_id else None
 
+            # Публикация сводного комментария в ленту лида с шагами и ID задач
+            try:
+                if result['tasks']:
+                    summary_lines: List[str] = [
+                        'Созданы задачи по итогам анализа:',
+                    ]
+                    for t in sorted(result['tasks'], key=lambda x: x.get('step') or 99):
+                        summary_lines.append(f"{t.get('step')}. {t.get('title')} — задача ID {t.get('id')}")
+                    feed_text = "\n".join(summary_lines)
+                    try:
+                        post_lead_timeline_comment(str(lead_id), feed_text)
+                    except Exception as e:
+                        log.warning(f"Не удалось опубликовать комментарий в ленту лида {lead_id}: {e}")
+            except Exception as e:
+                log.warning(f"Ошибка формирования сводного сообщения для лида {lead_id}: {e}")
+
         except Exception as e:
             log.exception(f"Ошибка логики создания задач для лида {lead_id}: {e}")
 
@@ -921,3 +969,22 @@ def list_user_tasks(user_id: str = None, limit: int = 10) -> Dict[str, Any]:
         data['start'] = 0  # Можно будет использовать для пагинации
     
     return _make_bitrix_request('tasks.task.list', data)
+
+
+def post_lead_timeline_comment(lead_id: str, comment: str) -> Dict[str, Any]:
+    """Публикует комментарий в таймлайн/ленту лида."""
+    lead_id_str = str(lead_id).strip()
+    if not lead_id_str:
+        raise BitrixError("ID лида пустой")
+    if not comment or not comment.strip():
+        raise BitrixError("Комментарий пустой")
+
+    data = {
+        'fields': {
+            'ENTITY_ID': int(lead_id_str),
+            'ENTITY_TYPE': 'lead',
+            'COMMENT': str(comment)
+        }
+    }
+    log.info(f"Публикуем комментарий в ленту лида {lead_id}")
+    return _make_bitrix_request('crm.timeline.comment.add', data)
