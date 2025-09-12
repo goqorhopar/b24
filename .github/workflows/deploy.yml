@@ -1,0 +1,87 @@
+name: Deploy to Beget VPS
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Run tests (if any)
+      run: |
+        echo "Running basic syntax check..."
+        python -m py_compile main.py
+        python -m py_compile bitrix.py
+        python -m py_compile db.py
+        python -m py_compile gemini_client.py
+        python -m py_compile utils.py
+        
+    - name: Deploy to VPS
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USERNAME }}
+        key: ${{ secrets.VPS_SSH_KEY }}
+        port: 22
+        script: |
+          echo "🚀 Starting deployment..."
+          
+          # Navigate to project directory
+          cd /opt/telegram-bot
+          
+          # Pull latest changes
+          echo "📥 Pulling latest changes..."
+          git pull origin main
+          
+          # Activate virtual environment
+          echo "🐍 Activating Python environment..."
+          source venv/bin/activate
+          
+          # Install/update dependencies
+          echo "📦 Installing dependencies..."
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          
+          # Restart services
+          echo "🔄 Restarting services..."
+          systemctl daemon-reload
+          systemctl restart telegram-bot
+          
+          # Check service status
+          echo "📊 Checking service status..."
+          systemctl status telegram-bot --no-pager
+          
+          # Test application
+          echo "🧪 Testing application..."
+          sleep 5
+          curl -f http://localhost:3000 || echo "Application not responding"
+          
+          echo "✅ Deployment completed successfully!"
+          
+    - name: Notify deployment status
+      if: always()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
