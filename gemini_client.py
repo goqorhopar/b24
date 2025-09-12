@@ -118,8 +118,28 @@ def normalize_transcript_format(text: str) -> str:
                 # Заменим префикс на явную роль
                 ln = re.sub(r"^\s*.*?[:\-]\s*", "МЕНЕДЖЕР: ", ln, count=1)
         out.append(ln)
-    cleaned = "\n".join(out)
+    # Удаляем лидирующие/хвостовые пустые строки
+    cleaned = "\n".join([l for l in out if l is not None])
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned
+
+
+def _is_header_or_meta(s: Optional[str]) -> bool:
+    if not s:
+        return False
+    t = str(s).strip()
+    if not t:
+        return False
+    # Совпадение телеграм-заголовка "Имя, [дата]"
+    if re.match(r"^[^\[,]{2,}?,\s*\[\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}(?::\d{2})?\]", t):
+        return True
+    # Явная роль менеджера
+    if t.upper().startswith("МЕНЕДЖЕР:"):
+        return True
+    # Похожие разделители без контента
+    if len(t) <= 4 and all(ch in "-_* ." for ch in t):
+        return True
+    return False
 
 def _build_analysis_prompt(transcript: str) -> str:
     """
@@ -699,11 +719,12 @@ def _simple_extract(text: str) -> Dict[str, Any]:
         # Бюджет
         m3 = re.search(r'(\d+[\s\d]*)(?:\s?руб|рублей|₽)', t, flags=re.IGNORECASE)
         ad_budget = m3.group(0) if m3 else None
-        # Продукт/услуга: возьмём тему из первых предложений
+        # Продукт/услуга: взять первую осмысленную строку, исключая мета-заголовки
         product = None
-        first_sentence = re.split(r'[\.!?\n]', t, maxsplit=1)[0].strip()
-        if len(first_sentence) > 0:
-            product = first_sentence[:200]
+        for candidate in [seg.strip() for seg in re.split(r'[\n]', t) if seg.strip()]:
+            if not _is_header_or_meta(candidate):
+                product = candidate[:200]
+                break
         # Эвристики по встрече/ЛПР
         is_lpr = True if re.search(r'ЛПР|прин\w* решен', t, re.IGNORECASE) else None
         meeting_scheduled = True if re.search(r'назначим|договорили\w* встреч', t, re.IGNORECASE) else None
@@ -781,7 +802,7 @@ def create_analysis_summary(data: Dict[str, Any]) -> str:
         lines.append(f"• Бюджет: {budget}")
 
     product = data.get("product")
-    if product:
+    if product and not _is_header_or_meta(product):
         prod_short = str(product)[:200] + ("..." if len(str(product)) > 200 else "")
         lines.append(f"• Продукт клиента: {prod_short}")
 
