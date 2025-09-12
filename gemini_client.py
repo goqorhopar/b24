@@ -104,9 +104,19 @@ def normalize_transcript_format(text: str) -> str:
     out = []
     # Пример строки: "Григорий Манукян, [11.09.2025 23:10]"
     meta_re = re.compile(r"^[^\[,]{2,}?,\s*\[\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}(?::\d{2})?\]\s*$")
+    # Маркеры менеджеров
+    manager_names = {"григорий", "виктор"}
+    speaker_re = re.compile(r"^([А-ЯЁ][а-яё]+)(?:\s+[А-ЯЁ][а-яё]+)?\s*[:\-]?")
     for ln in lines:
         if meta_re.match(ln.strip()):
             continue
+        # Помечаем реплики менеджеров для подсказки модели
+        m = speaker_re.match(ln.strip())
+        if m:
+            name = m.group(1).strip().lower()
+            if name in manager_names:
+                # Заменим префикс на явную роль
+                ln = re.sub(r"^\s*.*?[:\-]\s*", "МЕНЕДЖЕР: ", ln, count=1)
         out.append(ln)
     cleaned = "\n".join(out)
     return cleaned
