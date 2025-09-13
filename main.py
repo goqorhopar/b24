@@ -70,7 +70,8 @@ def _is_meeting_url(url: str) -> bool:
         # Проверка на поддерживаемые платформы
         supported_domains = [
             'zoom.us', 'meet.google.com', 'teams.microsoft.com', 
-            'talk.kontur.ru', 'ktalk.ru', 'telemost.yandex.ru'
+            'talk.kontur.ru', 'ktalk.ru', 'telemost.yandex.ru',
+            '2a14p7ld.ktalk.ru', 'us05web.zoom.us'
         ]
         
         return any(domain in parsed.netloc.lower() for domain in supported_domains)
