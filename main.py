@@ -3,6 +3,9 @@ import os
 import logging
 import requests
 from flask import Flask, request
+import threading
+import time
+from config import config
 
 from gemini_client import analyze_transcript_structured, create_analysis_summary
 from bitrix import update_lead_comprehensive
@@ -10,10 +13,17 @@ from db import init_db
 
 # --- Настройка логирования ---
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, str(config.LOG_LEVEL).upper(), logging.INFO),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 log = logging.getLogger("main")
+
+# Логируем ключевые параметры конфигурации при старте
+try:
+    log.info(f"Runtime config: {config.runtime_summary()}")
+except Exception:
+    # На случай, если где-то нет атрибутов
+    log.info("Runtime config: unable to render summary")
 
 # --- Flask app ---
 app = Flask(__name__)
@@ -25,6 +35,7 @@ if not TELEGRAM_BOT_TOKEN:
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 PORT = int(os.getenv("PORT", "3000"))
+USE_POLLING = os.getenv("USE_POLLING", "true").lower() == "true"
 
 # --- FSM состояния пользователей ---
 # user_states = { chat_id: {"state": "idle"/"awaiting_lead_id", "last_analysis": dict} }

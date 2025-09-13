@@ -26,8 +26,14 @@ log = logging.getLogger(__name__)
 # Конфигурация из окружения
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-1.5-pro")
+# Фолбэк-модель на случай лимитов
+MODEL_FALLBACK = os.getenv("GEMINI_MODEL_FALLBACK", "gemini-1.5-flash")
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 RETRY_DELAY = float(os.getenv("RETRY_DELAY", "2"))
+# Небольшой джиттер к задержке, чтобы разнести запросы
+RETRY_JITTER = float(os.getenv("RETRY_JITTER", "0.5"))
+# Ограничение длины входного текста (в символах) для снижения затрат токенов
+INPUT_MAX_CHARS = int(os.getenv("GEMINI_INPUT_MAX_CHARS", "15000"))
 TEMPERATURE = float(os.getenv("GEMINI_TEMPERATURE", "0.1"))
 TOP_P = float(os.getenv("GEMINI_TOP_P", "0.2"))
 MAX_OUTPUT_TOKENS_DEFAULT = int(os.getenv("GEMINI_MAX_TOKENS", "1200"))
@@ -388,50 +394,58 @@ def validate_gemini_output(data: Dict[str, Any]) -> Dict[str, Any]:
 
 # ---- Вызов модели: универсальный и надёжный ----
 
+def _truncate_for_input(text: str, max_chars: int) -> str:
+    """Грубое ограничение входного текста по символам с сохранением конца.
+    Берём последние max_chars символов, чтобы сохранить контекст финала разговора.
+    """
+    if not text:
+        return text
+    if len(text) <= max_chars:
+        return text
+    # Оставляем пометку, что текст обрезан
+    head = "[...обрезано для лимитов...]\n"
+    return head + text[-max_chars:]
+
 def _call_gemini(prompt: str, model: Optional[str] = None, max_tokens: int = MAX_OUTPUT_TOKENS_DEFAULT) -> str:
     """
     Умный обёртывающий вызов Gemini с ретраями и улучшенной обработкой rate limits.
-    Попробует несколько возможных путей вызова в зависимости от версии библиотеки:
-      1) genai.GenerativeModel(...).generate_content(...)
-      2) genai.generate_text(...) (если доступно)
-      3) genai.create_chat_completion(...) (старые интерфейсы)
-    Возвращает сырой текст-ответ модели.
+    Попробует несколько возможных путей вызова в зависимости от версии библиотеки.
+    На повторах: снижает max_tokens, добавляет jitter, при лимитах может переключиться на fallback-модель.
     """
     if model is None:
         model = MODEL_NAME
 
     last_exc = None
     base_delay = RETRY_DELAY
-    
+    current_model = model
+
     for attempt in range(1, MAX_RETRIES + 1):
+        # С каждым ретраем снижаем ожидаемую длину ответа
+        dynamic_max_tokens = max(256, int(max_tokens * (0.8 ** (attempt - 1))))
         try:
             # 1) Попытка через GenerativeModel (современные версии)
             if hasattr(genai, "GenerativeModel"):
                 try:
                     ModelClass = getattr(genai, "GenerativeModel")
-                    model_obj = ModelClass(model)
-                    # Попытка вызвать generate_content
+                    model_obj = ModelClass(current_model)
                     if hasattr(model_obj, "generate_content"):
                         resp = model_obj.generate_content(
                             prompt,
                             generation_config={
-                                "max_output_tokens": max_tokens,
+                                "max_output_tokens": dynamic_max_tokens,
                                 "temperature": TEMPERATURE,
                                 "top_p": TOP_P,
                                 "response_mime_type": "application/json"
                             },
                             safety_settings=SAFETY_SETTINGS or None
                         )
-                        # возращаем текст — в разных версиях может быть .text или .output
                         if hasattr(resp, "text"):
                             return resp.text
                         if isinstance(resp, dict) and "output" in resp:
                             out = resp.get("output")
                             if isinstance(out, dict):
-                                # возможна структура {'content': '...'} или candidates
                                 if "content" in out:
                                     return str(out["content"])
-                                # кандидаты
                                 candidates = out.get("candidates")
                                 if candidates and isinstance(candidates, list) and len(candidates) > 0:
                                     cand = candidates[0]
@@ -439,31 +453,33 @@ def _call_gemini(prompt: str, model: Optional[str] = None, max_tokens: int = MAX
                                         return cand.get("content", "") or str(cand)
                                     return str(cand)
                             return str(resp)
-                        # как fallback
                         return str(resp)
-                    # если нет generate_content — попробовать generate_text
                     if hasattr(model_obj, "generate_text"):
-                        resp = model_obj.generate_text(prompt, max_output_tokens=max_tokens)
+                        resp = model_obj.generate_text(prompt, max_output_tokens=dynamic_max_tokens)
                         if hasattr(resp, "text"):
                             return resp.text
                         return str(resp)
                 except Exception as e:
-                    # Проверяем на rate limit в исключении
-                    if "429" in str(e) or "rate limit" in str(e).lower() or "quota" in str(e).lower():
-                        wait_time = base_delay * (2 ** (attempt - 1))  # Экспоненциальная задержка
-                        log.warning(f"Rate limit exceeded. Waiting {wait_time}s before retry...")
+                    msg = str(e)
+                    if ("429" in msg) or ("rate limit" in msg.lower()) or ("quota" in msg.lower()):
+                        # Экспоненциальная задержка + джиттер
+                        wait_time = base_delay * (2 ** (attempt - 1)) + random.uniform(0, RETRY_JITTER)
+                        log.warning(f"Rate limit (SDK). Waiting {wait_time:.2f}s before retry...")
                         time.sleep(wait_time)
+                        # Переключаемся на fallback-модель со второго ретрая
+                        if attempt >= 2 and current_model != MODEL_FALLBACK:
+                            log.warning(f"Switching model to fallback '{MODEL_FALLBACK}' due to limits")
+                            current_model = MODEL_FALLBACK
                         last_exc = e
                         continue
                     log.debug(f"Попытка вызова через GenerativeModel провалилась: {e}")
                     last_exc = e
 
-            # 2) genai.generate_text (возможно в модуле)
+            # 2) genai.generate_text
             if hasattr(genai, "generate_text"):
                 try:
                     func = getattr(genai, "generate_text")
-                    resp = func(model=model, prompt=prompt, max_output_tokens=max_tokens, temperature=TEMPERATURE, top_p=TOP_P)
-                    # обработка возможных структур
+                    resp = func(model=current_model, prompt=prompt, max_output_tokens=dynamic_max_tokens, temperature=TEMPERATURE, top_p=TOP_P)
                     if isinstance(resp, dict):
                         if "candidates" in resp and resp["candidates"]:
                             cand = resp["candidates"][0]
@@ -475,29 +491,30 @@ def _call_gemini(prompt: str, model: Optional[str] = None, max_tokens: int = MAX
                             if isinstance(out, dict) and "content" in out:
                                 return out["content"]
                             return str(out)
-                    # если объект имеет .text
                     if hasattr(resp, "text"):
                         return resp.text
                     return str(resp)
                 except Exception as e:
-                    if "429" in str(e) or "rate limit" in str(e).lower() or "quota" in str(e).lower():
-                        wait_time = base_delay * (2 ** (attempt - 1))
-                        log.warning(f"Rate limit exceeded. Waiting {wait_time}s before retry...")
+                    msg = str(e)
+                    if ("429" in msg) or ("rate limit" in msg.lower()) or ("quota" in msg.lower()):
+                        wait_time = base_delay * (2 ** (attempt - 1)) + random.uniform(0, RETRY_JITTER)
+                        log.warning(f"Rate limit (generate_text). Waiting {wait_time:.2f}s before retry...")
                         time.sleep(wait_time)
+                        if attempt >= 2 and current_model != MODEL_FALLBACK:
+                            log.warning(f"Switching model to fallback '{MODEL_FALLBACK}' due to limits")
+                            current_model = MODEL_FALLBACK
                         last_exc = e
                         continue
                     log.debug(f"genai.generate_text провалился: {e}")
                     last_exc = e
 
-            # 3) Старые интерфейсы: create_chat_completion (редко в новых версиях)
+            # 3) Старые интерфейсы
             if hasattr(genai, "create_chat_completion"):
                 try:
-                    resp = genai.create_chat_completion(model=model, messages=[{"role": "user", "content": prompt}], max_output_tokens=max_tokens)
-                    # обычно resp.candidates[0].content
+                    resp = genai.create_chat_completion(model=current_model, messages=[{"role": "user", "content": prompt}], max_output_tokens=dynamic_max_tokens)
                     if hasattr(resp, "candidates") and resp.candidates:
                         return resp.candidates[0].content
                     if isinstance(resp, dict):
-                        # попробовать получить глубже
                         cand = resp.get("candidates")
                         if cand and isinstance(cand, list):
                             c0 = cand[0]
@@ -505,35 +522,31 @@ def _call_gemini(prompt: str, model: Optional[str] = None, max_tokens: int = MAX
                                 return c0["content"]
                     return str(resp)
                 except Exception as e:
-                    if "429" in str(e) or "rate limit" in str(e).lower() or "quota" in str(e).lower():
-                        wait_time = base_delay * (2 ** (attempt - 1))
-                        log.warning(f"Rate limit exceeded. Waiting {wait_time}s before retry...")
+                    msg = str(e)
+                    if ("429" in msg) or ("rate limit" in msg.lower()) or ("quota" in msg.lower()):
+                        wait_time = base_delay * (2 ** (attempt - 1)) + random.uniform(0, RETRY_JITTER)
+                        log.warning(f"Rate limit (legacy). Waiting {wait_time:.2f}s before retry...")
                         time.sleep(wait_time)
+                        if attempt >= 2 and current_model != MODEL_FALLBACK:
+                            log.warning(f"Switching model to fallback '{MODEL_FALLBACK}' due to limits")
+                            current_model = MODEL_FALLBACK
                         last_exc = e
                         continue
                     log.debug(f"create_chat_completion провалился: {e}")
                     last_exc = e
 
-            # Если ни один интерфейс не найден — попробуем REST API как надёжный фолбэк
+            # 4) REST API фолбэк
             try:
                 api_key = GEMINI_API_KEY
                 if not api_key:
                     raise RuntimeError("GEMINI_API_KEY не задан")
-                rest_model = model
-                # Попробуем привести названия к REST-идиомам, если указана укороченная форма
-                # Например: "gemini-1.5" -> "gemini-1.5-flash" (более доступная модель)
-                if rest_model in (None, "gemini-1.5"):
-                    rest_model = MODEL_NAME
+                rest_model = current_model or MODEL_NAME
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{rest_model}:generateContent?key={api_key}"
                 payload: Dict[str, Any] = {
                     "contents": [
-                        {
-                            "role": "user",
-                            "parts": [{"text": prompt}]
-                        }
-                    ],
+                        {"role": "user", "parts": [{"text": prompt}]}],
                     "generationConfig": {
-                        "maxOutputTokens": max_tokens,
+                        "maxOutputTokens": dynamic_max_tokens,
                         "temperature": TEMPERATURE,
                         "topP": TOP_P,
                         "responseMimeType": "application/json"
@@ -541,19 +554,25 @@ def _call_gemini(prompt: str, model: Optional[str] = None, max_tokens: int = MAX
                 }
                 headers = {"Content-Type": "application/json"}
                 r = requests.post(url, headers=headers, json=payload, timeout=30)
-                
+
                 if r.status_code == 429:
-                    # Рейт-лимит — подождём и повторим попытку с экспоненциальной задержкой
-                    wait_time = base_delay * (2 ** (attempt - 1))
-                    log.warning(f"Rate limit exceeded. Waiting {wait_time}s before retry...")
+                    # Учитываем Retry-After, если есть
+                    retry_after = 0.0
+                    try:
+                        retry_after = float(r.headers.get("Retry-After", "0"))
+                    except Exception:
+                        retry_after = 0.0
+                    wait_time = max(retry_after, base_delay * (2 ** (attempt - 1))) + random.uniform(0, RETRY_JITTER)
+                    log.warning(f"Rate limit (REST). Waiting {wait_time:.2f}s before retry...")
                     time.sleep(wait_time)
+                    if attempt >= 2 and current_model != MODEL_FALLBACK:
+                        log.warning(f"Switching model to fallback '{MODEL_FALLBACK}' due to limits")
+                        current_model = MODEL_FALLBACK
                     last_exc = requests.exceptions.HTTPError("429 Too Many Requests", response=r)
                     continue
-                    
+
                 r.raise_for_status()
                 data = r.json()
-                
-                # В v1beta ответ обычно: candidates[0].content.parts[*].text
                 if isinstance(data, dict):
                     candidates = data.get("candidates") or []
                     if candidates:
@@ -568,14 +587,20 @@ def _call_gemini(prompt: str, model: Optional[str] = None, max_tokens: int = MAX
                                         texts.append(str(p["text"]))
                                 if texts:
                                     return "\n".join(texts)
-                # Фолбэк — вернуть сырой JSON как строку
                 return r.text
-                
             except requests.exceptions.HTTPError as e:
                 if e.response and e.response.status_code == 429:
-                    wait_time = base_delay * (2 ** (attempt - 1))
-                    log.warning(f"Rate limit exceeded. Waiting {wait_time}s before retry...")
+                    retry_after = 0.0
+                    try:
+                        retry_after = float(e.response.headers.get("Retry-After", "0"))
+                    except Exception:
+                        retry_after = 0.0
+                    wait_time = max(retry_after, base_delay * (2 ** (attempt - 1))) + random.uniform(0, RETRY_JITTER)
+                    log.warning(f"Rate limit (REST exception). Waiting {wait_time:.2f}s before retry...")
                     time.sleep(wait_time)
+                    if attempt >= 2 and current_model != MODEL_FALLBACK:
+                        log.warning(f"Switching model to fallback '{MODEL_FALLBACK}' due to limits")
+                        current_model = MODEL_FALLBACK
                     last_exc = e
                     continue
                 last_exc = e
@@ -586,16 +611,14 @@ def _call_gemini(prompt: str, model: Optional[str] = None, max_tokens: int = MAX
 
         except Exception as e:
             last_exc = e
-            # Если это не rate limit ошибка, логируем и переходим к следующей попытке
             if "429" not in str(e) and "rate limit" not in str(e).lower() and "quota" not in str(e).lower():
                 log.warning(f"Попытка {attempt}/{MAX_RETRIES} к Gemini провалена: {e}")
                 if attempt < MAX_RETRIES:
-                    time.sleep(base_delay)
+                    time.sleep(base_delay + random.uniform(0, RETRY_JITTER))
                 else:
                     log.error(f"Не удалось вызвать Gemini после {MAX_RETRIES} попыток: {last_exc}")
                     raise last_exc
 
-    # Если дошли сюда, значит все попытки исчерпаны
     log.error(f"Failed to call Gemini API after retries")
     raise last_exc or RuntimeError("Failed to call Gemini API after retries")
 
@@ -614,13 +637,14 @@ def analyze_transcript_structured(transcript: str) -> Dict[str, Any]:
         # Препроцессинг: нормализуем формат и обезвреживаем потенциальные триггеры
         preprocessed = normalize_transcript_format(transcript)
         safe_txt = sanitize_transcript_for_safety(preprocessed)
+        # Ограничиваем входной размер, чтобы реже ловить лимиты
+        safe_txt = _truncate_for_input(safe_txt, INPUT_MAX_CHARS)
         prompt = _build_analysis_prompt(safe_txt)
 
         raw = _call_gemini(prompt, model=MODEL_NAME, max_tokens=MAX_OUTPUT_TOKENS_DEFAULT)
         if not raw:
             log.warning("Gemini вернул пустой ответ")
             return {"analysis": "Пустой ответ от модели"}
-
         parsed = extract_json_from_text(raw)
         if parsed is None:
             # Попробуем сделать повторный краткий вызов строго под JSON

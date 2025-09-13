@@ -5,7 +5,7 @@
  */
 
 // Настройки
-$secret = 'your-secret-key-here'; // Замените на ваш секретный ключ
+$secret = 'my_secret_key_123'; // Замените на ваш секретный ключ
 $project_path = '/opt/telegram-bot';
 $log_file = '/var/log/deploy.log';
 
