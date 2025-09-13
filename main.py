@@ -9,6 +9,7 @@ from flask import Flask, request
 from gemini_client import analyze_transcript_structured, create_analysis_summary
 from bitrix import update_lead_comprehensive
 from db import init_db
+from meeting_link_processor import meeting_link_processor
 
 # --- Настройка логирования ---
 logging.basicConfig(
@@ -54,6 +55,30 @@ def send_message(chat_id: int, text: str) -> None:
         log.error(f"Ошибка HTTP при отправке сообщения в чат {chat_id}: {e}")
 
 
+def _is_meeting_url(url: str) -> bool:
+    """
+    Проверка, является ли URL ссылкой на встречу
+    """
+    try:
+        import re
+        from urllib.parse import urlparse
+        
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            return False
+        
+        # Проверка на поддерживаемые платформы
+        supported_domains = [
+            'zoom.us', 'meet.google.com', 'teams.microsoft.com', 
+            'talk.kontur.ru'
+        ]
+        
+        return any(domain in parsed.netloc.lower() for domain in supported_domains)
+        
+    except Exception:
+        return False
+
+
 def _download_telegram_file(file_id: str) -> bytes:
     """Скачивает файл из Telegram по file_id и возвращает байты."""
     try:
@@ -97,87 +122,95 @@ def process_message(msg: dict):
 
     # --- Обработка команд ---
     if text.lower() in ("/start", "start"):
-        send_message(chat_id, "👋 Привет! Отправь мне транскрипт встречи, и я проведу анализ.")
+        send_message(chat_id, "👋 Привет! Отправь мне ссылку на встречу, и я автоматически присоединюсь, запишу и проанализирую её.")
         user_states[chat_id] = {"state": "idle", "last_analysis": None}
         return
 
     if text.lower() in ("/help", "help"):
         send_message(
             chat_id,
-            "ℹ️ Инструкция:\n"
-            "1. Отправь мне текст транскрипта встречи.\n"
-            "2. Я проведу анализ и пришлю краткое резюме.\n"
-            "3. Затем введи ID лида в Bitrix, чтобы обновить его."
+            "ℹ️ Просто отправь мне ссылку на встречу, и я:\n"
+            "• Автоматически присоединюсь\n"
+            "• Запишу аудио\n"
+            "• Сделаю транскрипцию\n"
+            "• Проведу анализ\n"
+            "• Обновлю лид в Bitrix\n\n"
+            "Поддерживаемые платформы: Zoom, Google Meet, Microsoft Teams, Контур.Толк"
         )
         return
 
-    # --- FSM логика ---
-    if state == "awaiting_lead_id":
-        if text.isdigit():
-            lead_id = int(text)
-            analysis = user_states[chat_id]["last_analysis"]
-            if not analysis:
-                send_message(chat_id, "🤔 Не найден предыдущий анализ. Пожалуйста, отправь сначала транскрипт.")
-                user_states[chat_id]["state"] = "idle"
-                return
+    # --- Проверка на ссылку встречи (основной режим) ---
+    if _is_meeting_url(text):
+        # Проверяем, не обрабатывается ли уже встреча для этого пользователя
+        if state in ["awaiting_meeting_link", "awaiting_meeting_analysis", "awaiting_lead_id_after_meeting"]:
+            send_message(chat_id, "⏳ Уже обрабатывается другая встреча. Пожалуйста, дождитесь её завершения.")
+            return
 
-            send_message(chat_id, f"🔗 Обновляю лид {lead_id}...")
+        send_message(chat_id, "🚀 Получил ссылку на встречу! Начинаю процесс...")
+        
+        # Запуск обработки встречи в отдельном потоке
+        def process_meeting():
             try:
-                result = update_lead_comprehensive(lead_id, analysis)
-                msg_text = f"✅ Лид {lead_id} успешно обновлён в Bitrix"
-                if isinstance(result, dict) and result.get('task_created'):
-                    task_id = result.get('task_id') or '—'
-                    msg_text += f"\n🗓 Создана задача, ID: {task_id}"
-                send_message(chat_id, msg_text)
-                log.info(f"Lead {lead_id} updated: {result}")
+                result = meeting_link_processor.process_meeting_link(text, chat_id, msg.get("from", {}).get("first_name", "Пользователь"))
+                if result['success']:
+                    send_message(chat_id, result['message'])
+                else:
+                    send_message(chat_id, result['message'])
+                    user_states[chat_id] = {"state": "idle", "last_analysis": None}
             except Exception as e:
-                send_message(chat_id, f"❌ Ошибка обновления лида {lead_id}: {e}")
-                log.error(f"Ошибка при обновлении лида {lead_id}: {e}")
-            finally:
+                log.error(f"Ошибка при обработке встречи: {e}")
+                send_message(chat_id, f"❌ Ошибка при обработке встречи: {e}")
                 user_states[chat_id] = {"state": "idle", "last_analysis": None}
+        
+        # Запуск в отдельном потоке, чтобы не блокировать основной процесс
+        meeting_thread = threading.Thread(target=process_meeting, daemon=True)
+        meeting_thread.start()
+        
+        # Изменение состояния на ожидание анализа
+        user_states[chat_id] = {"state": "awaiting_meeting_analysis", "last_analysis": None}
+        return
+
+    # --- FSM логика для обработки статусов ---
+    if state == "awaiting_meeting_analysis":
+        # Проверка статуса встречи
+        meeting_status = meeting_link_processor.get_meeting_status(chat_id)
+        if meeting_status == "awaiting_lead_id":
+            # Встреча завершена, ожидаем ID лида
+            user_states[chat_id] = {"state": "awaiting_lead_id_after_meeting", "last_analysis": None}
+            send_message(chat_id, "✅ Встреча завершена и проанализирована! Теперь введите ID лида для обновления:")
+        elif meeting_status in ["joining", "in_meeting", "recording", "processing"]:
+            send_message(chat_id, f"⏳ Встреча в процессе... Статус: {meeting_status}")
+        elif meeting_status in ["failed", "error", "no_audio", "transcription_failed", "analysis_failed"]:
+            send_message(chat_id, f"❌ Процесс встречи завершился с ошибкой. Статус: {meeting_status}")
+            user_states[chat_id] = {"state": "idle", "last_analysis": None}
         else:
-            send_message(chat_id, "❗ Введи корректный ID (только цифры).")
+            send_message(chat_id, "🤔 Статус встречи неизвестен. Пожалуйста, подождите или попробуйте снова.")
+    
+    elif state == "awaiting_lead_id_after_meeting":
+        # Обработка ID лида после автоматической встречи
+        if text.isdigit():
+            lead_id = text
+            send_message(chat_id, f"🔗 Обновляю лид {lead_id} на основе анализа встречи...")
+            
+            try:
+                result = meeting_link_processor.update_lead_from_meeting(chat_id, lead_id)
+                if result['success']:
+                    send_message(chat_id, result['message'])
+                    log.info(f"Lead {lead_id} updated from meeting: {result}")
+                else:
+                    send_message(chat_id, result['message'])
+                    log.error(f"Error updating lead {lead_id} from meeting: {result}")
+            except Exception as e:
+                send_message(chat_id, f"❌ Ошибка при обновлении лида {lead_id}: {e}")
+                log.error(f"Error updating lead {lead_id} from meeting: {e}")
+            
+            user_states[chat_id] = {"state": "idle", "last_analysis": None}
+        else:
+            send_message(chat_id, "❗ Введи корректный ID лида (только цифры).")
 
     elif state == "idle":
-        if not text:
-            doc = msg.get("document")
-            if doc and isinstance(doc, dict) and doc.get("file_name", "").lower().endswith(".txt"):
-                send_message(chat_id, "📥 Получил файл, загружаю и анализирую...")
-                try:
-                    file_id = doc["file_id"]
-                    raw = _download_telegram_file(file_id)
-                    text_data = None
-                    for enc in ("utf-8", "utf-16", "cp1251", "latin-1"):
-                        try:
-                            text_data = raw.decode(enc)
-                            break
-                        except UnicodeDecodeError:
-                            continue
-                    if not text_data:
-                        raise RuntimeError("Не удалось декодировать файл")
-
-                    send_message(chat_id, "🔎 Анализирую встречу из файла, подожди немного...")
-                    analysis = analyze_transcript_structured(text_data)
-                    summary = create_analysis_summary(analysis)
-                    user_states[chat_id] = {"state": "awaiting_lead_id", "last_analysis": analysis}
-                    send_message(chat_id, summary)
-                    send_message(chat_id, "Теперь введи ID лида, чтобы обновить его в Bitrix ⬇️")
-                except Exception as e:
-                    log.error(f"Ошибка обработки файла: {e}")
-                    send_message(chat_id, f"❌ Не удалось обработать файл: {e}")
-            else:
-                send_message(chat_id, "❗ Отправь текст для анализа или .txt файл с транскриптом 🚀")
-        else:
-            send_message(chat_id, "🔎 Анализирую встречу, подожди немного...")
-            try:
-                analysis = analyze_transcript_structured(text)
-                summary = create_analysis_summary(analysis)
-                user_states[chat_id] = {"state": "awaiting_lead_id", "last_analysis": analysis}
-                send_message(chat_id, summary)
-                send_message(chat_id, "Теперь введи ID лида, чтобы обновить его в Bitrix ⬇️")
-            except Exception as e:
-                log.error(f"Ошибка анализа текста: {e}")
-                send_message(chat_id, f"❌ Ошибка анализа: {e}")
+        # Если в idle состоянии пришло не ссылка - предлагаем отправить ссылку
+        send_message(chat_id, "👋 Отправь мне ссылку на встречу, и я автоматически присоединюсь, запишу и проанализирую её.")
 
 
 def polling_worker():
@@ -212,136 +245,6 @@ def polling_worker():
 def index():
     """Проверка, что сервис работает"""
     return {"ok": True, "message": "Telegram bot is running"}, 200
-
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    """Основной обработчик Telegram вебхуков"""
-    data = request.json
-    if not data or "message" not in data:
-        return {"ok": True}
-
-    chat_id = data["message"]["chat"]["id"]
-    msg = data["message"]
-    text = msg.get("text", "").strip()
-
-    # Инициализация состояния для нового пользователя
-    if chat_id not in user_states:
-        user_states[chat_id] = {"state": "idle", "last_analysis": None}
-
-    state = user_states[chat_id]["state"]
-
-    # --- Обработка команд ---
-    if text.lower() in ("/start", "start"):
-        send_message(chat_id, "👋 Привет! Отправь мне транскрипт встречи, и я проведу анализ.")
-        user_states[chat_id] = {"state": "idle", "last_analysis": None}
-        return {"ok": True}
-
-    if text.lower() in ("/help", "help"):
-        send_message(
-            chat_id,
-            "ℹ️ Инструкция:\n"
-            "1. Отправь мне текст транскрипта встречи.\n"
-            "2. Я проведу анализ и пришлю краткое резюме.\n"
-            "3. Затем введи ID лида в Bitrix, чтобы обновить его."
-        )
-        return {"ok": True}
-
-    # --- FSM логика ---
-    if state == "awaiting_lead_id":
-        if text.isdigit():
-            lead_id = int(text)
-            analysis = user_states[chat_id]["last_analysis"]
-            send_message(chat_id, f"🔗 Обновляю лид {lead_id}...")
-
-            try:
-                result = update_lead_comprehensive(lead_id, analysis)
-                msg = f"✅ Лид {lead_id} успешно обновлён в Bitrix"
-                if isinstance(result, dict) and result.get('task_created'):
-                    task_id = result.get('task_id') or '—'
-                    msg += f"\n🗓 Создана задача, ID: {task_id}"
-                send_message(chat_id, msg)
-                log.info(f"Lead {lead_id} updated: {result}")
-            except Exception as e:
-                send_message(chat_id, f"❌ Ошибка обновления лида {lead_id}: {e}")
-                log.error(f"Ошибка при обновлении лида {lead_id}: {e}")
-
-            # Очистка состояния
-            user_states[chat_id] = {"state": "idle", "last_analysis": None}
-        else:
-            send_message(chat_id, "❗ Введи корректный ID (только цифры).")
-
-    elif state == "idle":
-        # Если пользователь прислал ID лида цифрами даже в idle — используем последнее сохранённое
-        if text.isdigit() and user_states.get(chat_id, {}).get("last_analysis"):
-            lead_id = int(text)
-            analysis = user_states[chat_id]["last_analysis"]
-            send_message(chat_id, f"🔗 Обновляю лид {lead_id}...")
-            try:
-                result = update_lead_comprehensive(lead_id, analysis)
-                msg = f"✅ Лид {lead_id} успешно обновлён в Bitrix"
-                if isinstance(result, dict) and result.get('task_created'):
-                    task_id = result.get('task_id') or '—'
-                    msg += f"\n🗓 Создана задача, ID: {task_id}"
-                send_message(chat_id, msg)
-                log.info(f"Lead {lead_id} updated: {result}")
-            except Exception as e:
-                send_message(chat_id, f"❌ Ошибка обновления лида {lead_id}: {e}")
-                log.error(f"Ошибка при обновлении лида {lead_id}: {e}")
-            user_states[chat_id] = {"state": "idle", "last_analysis": None}
-        elif not text:
-            # Проверяем документ .txt
-            doc = msg.get("document")
-            if doc and isinstance(doc, dict):
-                file_name = doc.get("file_name", "")
-                if file_name.lower().endswith(".txt"):
-                    send_message(chat_id, "📥 Получил файл, загружаю и анализирую...")
-                    try:
-                        file_id = doc.get("file_id")
-                        raw = _download_telegram_file(file_id)
-                        # Пытаемся определить кодировку и преобразовать в текст
-                        text_data = None
-                        for enc in ("utf-8", "utf-16", "cp1251", "latin-1"):
-                            try:
-                                text_data = raw.decode(enc)
-                                break
-                            except Exception:
-                                continue
-                        if not text_data:
-                            raise RuntimeError("Не удалось декодировать файл")
-
-                        send_message(chat_id, "🔎 Анализирую встречу из файла, подожди немного...")
-                        analysis = analyze_transcript_structured(text_data)
-                        summary = create_analysis_summary(analysis)
-
-                        user_states[chat_id] = {
-                            "state": "awaiting_lead_id",
-                            "last_analysis": analysis
-                        }
-
-                        send_message(chat_id, summary)
-                        send_message(chat_id, "Теперь введи ID лида, чтобы обновить его в Bitrix ⬇️")
-                        return {"ok": True}
-                    except Exception as e:
-                        log.error(f"Ошибка обработки файла: {e}")
-                        send_message(chat_id, f"❌ Не удалось обработать файл: {e}")
-                        return {"ok": True}
-
-            send_message(chat_id, "❗ Отправь текст для анализа или .txt файл с транскриптом 🚀")
-        else:
-            send_message(chat_id, "🔎 Анализирую встречу, подожди немного...")
-            analysis = analyze_transcript_structured(text)
-            summary = create_analysis_summary(analysis)
-
-            user_states[chat_id] = {
-                "state": "awaiting_lead_id",
-                "last_analysis": analysis
-            }
-
-            send_message(chat_id, summary)
-            send_message(chat_id, "Теперь введи ID лида, чтобы обновить его в Bitrix ⬇️")
-
-    return {"ok": True}
 
 
 # --- Точка входа ---

@@ -43,7 +43,13 @@ class Config:
     MAX_COMMENT_LENGTH = int(os.getenv('MAX_COMMENT_LENGTH', '8000'))
     
     # Admin
-    ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')
+    ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', '7537953397')  # ID администратора для уведомлений
+    
+    # Meeting Automation
+    MEETING_DISPLAY_NAME = os.getenv('MEETING_DISPLAY_NAME', 'Ассистент Григория Сергеевича')  # Имя для участия в встречах
+    MEETING_HEADLESS = os.getenv('MEETING_HEADLESS', 'true').lower() == 'true'  # Режим без GUI
+    MEETING_AUTO_LEAVE = os.getenv('MEETING_AUTO_LEAVE', 'true').lower() == 'true'  # Автоматический выход после встречи
+    MEETING_DURATION_MINUTES = int(os.getenv('MEETING_DURATION_MINUTES', '60'))  # Максимальная длительность встречи
     
     @classmethod
     def validate(cls) -> Dict[str, Any]:
