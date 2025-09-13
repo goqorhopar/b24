@@ -316,7 +316,7 @@ class MeetingLinkProcessor:
             # Проверка на поддерживаемые платформы
             supported_domains = [
                 'zoom.us', 'meet.google.com', 'teams.microsoft.com', 
-                'talk.kontur.ru'
+                'talk.kontur.ru', 'ktalk.ru', 'telemost.yandex.ru'
             ]
             
             return any(domain in parsed.netloc.lower() for domain in supported_domains)

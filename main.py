@@ -70,7 +70,7 @@ def _is_meeting_url(url: str) -> bool:
         # Проверка на поддерживаемые платформы
         supported_domains = [
             'zoom.us', 'meet.google.com', 'teams.microsoft.com', 
-            'talk.kontur.ru'
+            'talk.kontur.ru', 'ktalk.ru', 'telemost.yandex.ru'
         ]
         
         return any(domain in parsed.netloc.lower() for domain in supported_domains)
@@ -135,7 +135,7 @@ def process_message(msg: dict):
             "• Сделаю транскрипцию\n"
             "• Проведу анализ\n"
             "• Обновлю лид в Bitrix\n\n"
-            "Поддерживаемые платформы: Zoom, Google Meet, Microsoft Teams, Контур.Толк"
+            "Поддерживаемые платформы: Zoom, Google Meet, Microsoft Teams, Контур.Толк, Яндекс Телемост"
         )
         return
 

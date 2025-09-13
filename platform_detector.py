@@ -23,10 +23,13 @@ class MeetingPlatformDetector:
                     r'zoom\.us/my/',
                     r'zoom\.us/webinar/',
                     r'zoom\.us/rec/',
+                    r'[a-z0-9-]*\.zoom\.us/j/',
+                    r'[a-z0-9-]*\.zoom\.us/s/',
+                    r'[a-z0-9-]*\.zoom\.us/w/',
                 ],
                 'id_patterns': [
-                    r'(?:zoom\.us/j/|zoom\.us/s/|zoom\.us/w/)([\w-]+)',
-                    r'(?:zoom\.us/my/)([\w-]+)',
+                    r'(?:[a-z0-9-]*\.)?zoom\.us/(?:j/|s/|w/)([\w-]+)',
+                    r'(?:[a-z0-9-]*\.)?zoom\.us/my/([\w-]+)',
                 ],
                 'meeting_id_length': [9, 10, 11],
                 'required_params': [],
@@ -68,13 +71,30 @@ class MeetingPlatformDetector:
                     r'talk\.kontur\.ru/',
                     r'kontur\.ru/talk/',
                     r'kontur\.ru/meeting/',
+                    r'ktalk\.ru/',
+                    r'[a-z0-9-]*\.ktalk\.ru/',
                 ],
                 'id_patterns': [
                     r'talk\.kontur\.ru/([^/?]+)',
                     r'kontur\.ru/talk/([^/?]+)',
                     r'kontur\.ru/meeting/([^/?]+)',
+                    r'(?:[a-z0-9-]*\.)?ktalk\.ru/([^/?]+)',
                 ],
                 'meeting_id_length': [8, 9, 10, 11, 12],
+                'required_params': [],
+                'optional_params': ['password', 'pin']
+            },
+            'yandex_telemost': {
+                'name': 'Яндекс Телемост',
+                'url_patterns': [
+                    r'telemost\.yandex\.ru/j/',
+                    r'telemost\.yandex\.ru/',
+                ],
+                'id_patterns': [
+                    r'telemost\.yandex\.ru/j/([^/?]+)',
+                    r'telemost\.yandex\.ru/([^/?]+)',
+                ],
+                'meeting_id_length': [10, 11, 12, 13, 14],
                 'required_params': [],
                 'optional_params': ['password', 'pin']
             }
@@ -106,6 +126,12 @@ class MeetingPlatformDetector:
                 r'talk\.kontur\.ru',
                 r'kontur\.ru/talk',
                 r'kontur\s+meeting',
+            ],
+            'yandex_telemost': [
+                r'яндекс\s+телемост',
+                r'telemost\.yandex\.ru',
+                r'телемост\s+яндекс',
+                r'яндекс\s+встреча',
             ]
         }
     
