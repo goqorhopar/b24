@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import re
 from urllib.parse import urlparse
 
-import config
+from config import config
 from meeting_automation import create_meeting_automation
 from audio_capture import AudioCapture
 from speech_transcriber import SpeechTranscriber
