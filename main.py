@@ -5,6 +5,7 @@ import requests
 import threading
 import time
 from flask import Flask, request
+from config import config
 
 from gemini_client import analyze_transcript_structured, create_analysis_summary
 from bitrix import update_lead_comprehensive
