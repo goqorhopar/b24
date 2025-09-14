@@ -260,6 +260,74 @@ class MeetingPlatformDetector:
             log.error(f"Ошибка при определении платформы из email: {e}")
             return None
     
+    def detect_platform(self, url: str) -> Optional[Dict[str, Any]]:
+        """Основной метод определения платформы из URL"""
+        try:
+            log.info(f"Определение платформы для URL: {url}")
+            
+            # Сначала пробуем определить из URL
+            platform_info = self.detect_platform_from_url(url)
+            if platform_info:
+                log.info(f"Платформа определена из URL: {platform_info['platform_name']}")
+                return platform_info
+            
+            # Если не удалось из URL, пробуем из текста
+            text_platforms = self.detect_platform_from_text(url)
+            if text_platforms:
+                best_match = text_platforms[0]
+                log.info(f"Платформа определена из текста: {best_match['platform_name']}")
+                return {
+                    'platform': best_match['platform'],
+                    'platform_name': best_match['platform_name'],
+                    'url': url,
+                    'meeting_id': None,
+                    'params': {},
+                    'validation': {'valid': True, 'message': 'Detected from text'},
+                    'confidence': best_match['confidence'],
+                    'detected_at': datetime.now().isoformat()
+                }
+            
+            log.warning("Платформа не определена")
+            return None
+            
+        except Exception as e:
+            log.error(f"Ошибка при определении платформы: {e}")
+            return None
+    
+    def detect_platform(self, url: str) -> Optional[Dict[str, Any]]:
+        """Основной метод определения платформы из URL"""
+        try:
+            log.info(f"Определение платформы для URL: {url}")
+            
+            # Сначала пробуем определить из URL
+            platform_info = self.detect_platform_from_url(url)
+            if platform_info:
+                log.info(f"Платформа определена из URL: {platform_info['platform_name']}")
+                return platform_info
+            
+            # Если не удалось из URL, пробуем из текста
+            text_platforms = self.detect_platform_from_text(url)
+            if text_platforms:
+                best_match = text_platforms[0]
+                log.info(f"Платформа определена из текста: {best_match['platform_name']}")
+                return {
+                    'platform': best_match['platform'],
+                    'platform_name': best_match['platform_name'],
+                    'url': url,
+                    'meeting_id': None,
+                    'params': {},
+                    'validation': {'valid': True, 'message': 'Detected from text'},
+                    'confidence': best_match['confidence'],
+                    'detected_at': datetime.now().isoformat()
+                }
+            
+            log.warning("Платформа не определена")
+            return None
+            
+        except Exception as e:
+            log.error(f"Ошибка при определении платформы: {e}")
+            return None
+    
     def get_platform_info(self, platform_key: str) -> Optional[Dict[str, Any]]:
         """Получить информацию о платформе"""
         return self.platform_patterns.get(platform_key)
