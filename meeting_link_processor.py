@@ -16,7 +16,7 @@ from audio_capture import AudioCapture
 from speech_transcriber import SpeechTranscriber
 from meeting_analyzer import MeetingAnalyzer
 from bitrix_meeting_integration import update_lead_from_meeting_analysis, create_meeting_follow_up_tasks
-from platform_detector import PlatformDetector
+from platform_detector import MeetingPlatformDetector
 
 log = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class MeetingLinkProcessor:
         self.audio_capture = None
         self.speech_transcriber = None
         self.meeting_analyzer = None
-        self.platform_detector = PlatformDetector()
+        self.platform_detector = MeetingPlatformDetector()
         self.active_meetings = {}  # {chat_id: meeting_info}
         self.meeting_threads = {}  # {chat_id: thread}
         
