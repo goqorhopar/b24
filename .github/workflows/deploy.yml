@@ -1,89 +1,181 @@
-name: Deploy to Beget VPS
+name: Deploy to VPS
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
-    - name: Setup Python (for basic checks)
+      
+    - name: Setup Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-
-    - name: Install dependencies (CI)
+        
+    - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-
-    - name: Run basic syntax checks
+        
+    - name: Run syntax check
       run: |
+        echo "🔍 Проверяем синтаксис Python файлов..."
         python -m py_compile main.py
-        python -m py_compile bitrix.py
+        python -m py_compile config.py
         python -m py_compile db.py
+        python -m py_compile bitrix.py
         python -m py_compile gemini_client.py
         python -m py_compile utils.py
-
-    - name: Ensure target directory exists (SSH)
+        echo "✅ Синтаксис корректен!"
+        
+    - name: Validate configuration
+      run: |
+        echo "⚙️ Проверяем конфигурацию..."
+        python -c "
+        import sys
+        sys.path.append('.')
+        try:
+            from config import *
+            print('✅ Конфигурация загружена успешно')
+        except Exception as e:
+            print(f'❌ Ошибка в конфигурации: {e}')
+            sys.exit(1)
+        "
+        
+    - name: Deploy to VPS
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ secrets.VPS_HOST }}
         username: ${{ secrets.VPS_USERNAME }}
-        password: ${{ secrets.VPS_PASSWORD }}
-        port: 22
+        key: ${{ secrets.VPS_SSH_KEY }}
+        port: ${{ secrets.VPS_PORT || 22 }}
         script: |
-          mkdir -p /opt/telegram-bot
-          chown -R root:root /opt/telegram-bot
-
-    - name: Upload project files to VPS (SCP)
-      uses: appleboy/scp-action@v0.1.7
-      with:
-        host: ${{ secrets.VPS_HOST }}
-        username: ${{ secrets.VPS_USERNAME }}
-        password: ${{ secrets.VPS_PASSWORD }}
-        port: 22
-        source: .
-        target: /opt/telegram-bot
-        overwrite: true
-
-    - name: Restart services on VPS (SSH)
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.VPS_HOST }}
-        username: ${{ secrets.VPS_USERNAME }}
-        password: ${{ secrets.VPS_PASSWORD }}
-        port: 22
-        script: |
-          echo "🚀 Applying deployment..."
-          cd /opt/telegram-bot
-
-          echo "🐍 Ensuring Python venv..."
-          if [ ! -d venv ]; then
-            python3 -m venv venv
+          set -e
+          echo "🚀 Начинаем деплой на VPS..."
+          
+          # Определяем директорию проекта
+          PROJECT_DIR="/opt/telegram-bot"
+          if [ ! -d "$PROJECT_DIR" ]; then
+              PROJECT_DIR="/home/$USER/telegram-bot"
           fi
+          if [ ! -d "$PROJECT_DIR" ]; then
+              PROJECT_DIR="$HOME/telegram-bot"
+          fi
+          
+          echo "📁 Рабочая директория: $PROJECT_DIR"
+          cd "$PROJECT_DIR"
+          
+          # Останавливаем бота
+          echo "⏹️ Останавливаем бота..."
+          sudo systemctl stop telegram-bot 2>/dev/null || pkill -f "python.*main.py" 2>/dev/null || true
+          sleep 2
+          
+          # Получаем последние изменения
+          echo "📥 Получаем последние изменения..."
+          git fetch origin
+          git reset --hard origin/main
+          git clean -fd
+          
+          # Создаем виртуальное окружение если не существует
+          if [ ! -d "venv" ]; then
+              echo "🐍 Создаем виртуальное окружение..."
+              python3 -m venv venv
+          fi
+          
+          # Активируем виртуальное окружение
+          echo "🔧 Активируем виртуальное окружение..."
           source venv/bin/activate
-
-          echo "📦 Installing/updating dependencies..."
+          
+          # Обновляем зависимости
+          echo "📦 Обновляем зависимости..."
           pip install --upgrade pip
           pip install -r requirements.txt
-
-          echo "🔄 Restarting services..."
-          systemctl daemon-reload
-          systemctl restart telegram-bot || true
-          systemctl restart telegram-poller || true
-
-          echo "📊 Checking service status..."
-          systemctl status telegram-bot --no-pager || journalctl -u telegram-bot -n 200 --no-pager
-          systemctl status telegram-poller --no-pager || true
-
-          echo "🧪 Health check..."
-          sleep 5
-          curl -fsS http://localhost:3000 || echo "Application not responding"
-
-          echo "✅ Deployment completed!"
+          
+          # Настраиваем переменные окружения
+          if [ -f ".env.example" ] && [ ! -f ".env" ]; then
+              echo "⚙️ Создаем файл .env из .env.example..."
+              cp .env.example .env
+              echo "⚠️ Не забудьте настроить переменные в файле .env!"
+          fi
+          
+          # Проверяем конфигурацию
+          echo "🔍 Проверяем конфигурацию..."
+          python3 -c "
+          import sys
+          sys.path.append('.')
+          try:
+              from config import *
+              print('✅ Конфигурация загружена успешно')
+          except Exception as e:
+              print(f'❌ Ошибка в конфигурации: {e}')
+              sys.exit(1)
+          "
+          
+          # Создаем systemd сервис если не существует
+          if [ ! -f "/etc/systemd/system/telegram-bot.service" ]; then
+              echo "🔧 Создаем systemd сервис..."
+              sudo tee /etc/systemd/system/telegram-bot.service > /dev/null <<EOF
+          [Unit]
+          Description=Telegram Bot
+          After=network.target
+          
+          [Service]
+          Type=simple
+          User=$USER
+          WorkingDirectory=$PROJECT_DIR
+          Environment=PATH=$PROJECT_DIR/venv/bin
+          ExecStart=$PROJECT_DIR/venv/bin/python main.py
+          Restart=always
+          RestartSec=10
+          
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+              
+              sudo systemctl daemon-reload
+              sudo systemctl enable telegram-bot
+          fi
+          
+          # Запускаем бота
+          echo "▶️ Запускаем бота..."
+          sudo systemctl start telegram-bot
+          
+          # Проверяем статус
+          sleep 3
+          if sudo systemctl is-active --quiet telegram-bot; then
+              echo "✅ Бот успешно запущен!"
+          else
+              echo "❌ Ошибка при запуске бота!"
+              sudo journalctl -u telegram-bot --no-pager -l --since "1 minute ago"
+              exit 1
+          fi
+          
+          echo "🎉 Деплой завершен успешно!"
+          
+    - name: Verify deployment
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USERNAME }}
+        key: ${{ secrets.VPS_SSH_KEY }}
+        port: ${{ secrets.VPS_PORT || 22 }}
+        script: |
+          echo "🔍 Проверяем статус деплоя..."
+          sudo systemctl status telegram-bot --no-pager -l
+          echo "📊 Последние логи:"
+          sudo journalctl -u telegram-bot --no-pager -l --since "2 minutes ago"
+          
+    - name: Notify deployment status
+      if: always()
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "✅ Деплой прошел успешно!"
+        else
+          echo "❌ Деплой завершился с ошибкой!"
+        fi

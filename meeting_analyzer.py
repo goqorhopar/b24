@@ -310,6 +310,14 @@ class MeetingAnalyzer:
         self.checklist = MeetingChecklist()
         self.analysis_history = []
     
+    def analyze_meeting(self, transcript: str, meeting_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Базовый метод анализа встречи (для совместимости)"""
+        return self.analyze_meeting_with_checklist(
+            transcript=transcript,
+            checklist_type='sales_meeting',
+            meeting_info=meeting_info
+        )
+    
     def analyze_meeting_with_checklist(self, 
                                     transcript: str,
                                     checklist_type: str = 'sales_meeting',

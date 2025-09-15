@@ -7,6 +7,16 @@ import time
 from flask import Flask, request
 from config import config
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    print("✅ Environment variables loaded from .env file")
+except ImportError:
+    print("⚠️  python-dotenv not installed, using system environment variables only")
+except Exception as e:
+    print(f"⚠️  Error loading .env file: {e}")
+
 from gemini_client import analyze_transcript_structured, create_analysis_summary
 from bitrix import update_lead_comprehensive
 from db import init_db
