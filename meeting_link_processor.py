@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 from config import config
 from meeting_automation import create_meeting_automation
-from audio_capture import AudioCapture
+from audio_capture import MeetingAudioRecorder
 from speech_transcriber import SpeechTranscriber
 from meeting_analyzer import MeetingAnalyzer
 from bitrix_meeting_integration import update_lead_from_meeting_analysis, create_meeting_follow_up_tasks
@@ -145,7 +145,7 @@ class MeetingLinkProcessor:
             # Шаг 2: Начало записи аудио
             self._send_notification(chat_id, "🎙️ Начинаю запись аудио...")
             
-            audio_success = self.audio_capture.start_capture()
+            audio_success = self.audio_capture.start_meeting_recording(meeting_url)
             if not audio_success:
                 meeting_info['status'] = 'audio_failed'
                 self._send_notification(chat_id, "❌ Не удалось начать запись аудио.")
@@ -160,25 +160,58 @@ class MeetingLinkProcessor:
             
             start_time = time.time()
             max_duration = config.MEETING_DURATION_MINUTES * 60
+            last_status_check = start_time
+            meeting_ended = False
             
             while time.time() - start_time < max_duration:
-                # Проверка, все еще ли мы в встречи
-                if not self.meeting_automation.is_in_meeting():
-                    self._send_notification(chat_id, "📤 Встреча завершена. Прекращаю запись...")
+                try:
+                    # Проверка, все еще ли мы в встречи
+                    current_time = time.time()
+                    if current_time - last_status_check >= 30:  # Проверка каждые 30 секунд
+                        in_meeting = self.meeting_automation.is_in_meeting()
+                        last_status_check = current_time
+                        
+                        if not in_meeting:
+                            self._send_notification(chat_id, "📤 Встреча завершена. Прекращаю запись...")
+                            meeting_ended = True
+                            break
+                        
+                        # Периодические уведомления о статусе
+                        elapsed_minutes = int((current_time - start_time) / 60)
+                        if elapsed_minutes > 0 and elapsed_minutes % 5 == 0:
+                            self._send_notification(chat_id, f"⏱️ Запись продолжается... Прошло {elapsed_minutes} минут")
+                    
+                    # Короткая пауза для снижения нагрузки
+                    time.sleep(5)
+                    
+                except Exception as e:
+                    log.error(f"Ошибка при проверке статуса встречи: {e}")
+                    # Если ошибка при проверке, считаем что встреча завершена
+                    meeting_ended = True
                     break
-                
-                # Периодические уведомления о статусе
-                elapsed_minutes = int((time.time() - start_time) / 60)
-                if elapsed_minutes > 0 and elapsed_minutes % 5 == 0:
-                    self._send_notification(chat_id, f"⏱️ Запись продолжается... Прошло {elapsed_minutes} минут")
-                
-                time.sleep(30)  # Проверка каждые 30 секунд
             
-            # Шаг 4: Остановка записи
+            # Если встреча не завершилась принудительно, но достигнут лимит времени
+            if not meeting_ended and time.time() - start_time >= max_duration:
+                self._send_notification(chat_id, f"⏰ Достигнут лимит времени ({config.MEETING_DURATION_MINUTES} минут). Прекращаю запись...")
+                meeting_ended = True
+            
+            # Шаг 4: Выход из встречи и остановка записи
+            self._send_notification(chat_id, "🚪 Выхожу из встречи...")
+            try:
+                leave_success = self.meeting_automation.leave_meeting()
+                if leave_success:
+                    self._send_notification(chat_id, "✅ Успешно вышел из встречи.")
+                else:
+                    self._send_notification(chat_id, "⚠️ Не удалось корректно выйти из встречи, но продолжаю обработку...")
+            except Exception as e:
+                log.error(f"Ошибка при выходе из встречи: {e}")
+                self._send_notification(chat_id, "⚠️ Ошибка при выходе из встречи, но продолжаю обработку...")
+            
+            # Шаг 5: Остановка записи
             self._send_notification(chat_id, "⏹️ Останавливаю запись аудио...")
-            audio_data = self.audio_capture.stop_capture()
+            audio_file = self.audio_capture.stop_meeting_recording()
             
-            if not audio_data:
+            if not audio_file:
                 meeting_info['status'] = 'no_audio'
                 self._send_notification(chat_id, "❌ Не удалось получить записанное аудио.")
                 self._cleanup_meeting(chat_id)
@@ -187,8 +220,8 @@ class MeetingLinkProcessor:
             meeting_info['status'] = 'processing'
             self._send_notification(chat_id, "📝 Начинаю транскрипцию аудио...")
             
-            # Шаг 5: Транскрипция аудио
-            transcript_result = self.speech_transcriber.transcribe_audio_data(audio_data)
+            # Шаг 6: Транскрипция аудио
+            transcript_result = self.speech_transcriber.transcribe_file(audio_file)
             
             if not transcript_result or not transcript_result.get('text'):
                 meeting_info['status'] = 'transcription_failed'
@@ -201,7 +234,7 @@ class MeetingLinkProcessor:
             
             self._send_notification(chat_id, f"✅ Транскрипция завершена. Длина: {len(transcript_text)} символов.")
             
-            # Шаг 6: Анализ встречи
+            # Шаг 7: Анализ встречи
             self._send_notification(chat_id, "🧠 Начинаю анализ встречи...")
             
             analysis_result = self.meeting_analyzer.analyze_meeting(
@@ -224,13 +257,13 @@ class MeetingLinkProcessor:
             
             self._send_notification(chat_id, "✅ Анализ встречи завершен!")
             
-            # Шаг 7: Отправка анализа пользователю
+            # Шаг 8: Отправка анализа пользователю
             self._send_analysis_to_user(chat_id, analysis_result)
             
-            # Шаг 8: Запрос ID лида
+            # Шаг 9: Запрос ID лида
             self._send_notification(chat_id, "🔍 Пожалуйста, отправьте ID лида в Bitrix24 для обновления:")
             
-            # Шаг 9: Уведомление администратора
+            # Шаг 10: Уведомление администратора
             self._notify_admin(meeting_info)
             
         except Exception as e:
@@ -240,7 +273,7 @@ class MeetingLinkProcessor:
             self._notify_admin_about_error(meeting_info, str(e))
         
         finally:
-            # Шаг 10: Выход из встречи и очистка
+            # Шаг 11: Выход из встречи и очистка
             if config.MEETING_AUTO_LEAVE:
                 self._send_notification(chat_id, "🚪 Выхожу из встречи...")
                 self.meeting_automation.leave_meeting()
@@ -337,7 +370,7 @@ class MeetingLinkProcessor:
             
             # Инициализация захвата аудио
             if not self.audio_capture:
-                self.audio_capture = AudioCapture()
+                self.audio_capture = MeetingAudioRecorder()
             
             # Инициализация транскрибера
             if not self.speech_transcriber:
