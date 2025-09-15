@@ -1,73 +1,111 @@
 #!/bin/bash
 
 # Простой скрипт деплоя для VPS
-# Запуск: chmod +x simple_deploy.sh && ./simple_deploy.sh
+# Запускать на VPS
 
-VPS_IP="109.172.47.253"
-VPS_USER="root"
+set -e
 
-echo "🚀 Деплой Telegram бота на VPS $VPS_IP"
-echo "📋 Подключитесь к серверу и выполните следующие команды:"
-echo ""
+echo "🚀 Начинаем деплой бота..."
 
-echo "1️⃣ Подключение к серверу:"
-echo "   ssh $VPS_USER@$VPS_IP"
-echo "   (пароль: MmSS0JSm%6vb)"
-echo ""
+# Определяем директорию проекта
+PROJECT_DIR="/opt/telegram-bot"
+if [ ! -d "$PROJECT_DIR" ]; then
+    PROJECT_DIR="/home/$USER/telegram-bot"
+fi
+if [ ! -d "$PROJECT_DIR" ]; then
+    PROJECT_DIR="$HOME/telegram-bot"
+fi
 
-echo "2️⃣ Обновление системы:"
-echo "   apt update && apt upgrade -y"
-echo "   apt install -y python3 python3-pip python3-venv git nginx ufw"
-echo ""
+echo "📁 Рабочая директория: $PROJECT_DIR"
 
-echo "3️⃣ Создание директории проекта:"
-echo "   mkdir -p /opt/telegram-bot"
-echo "   cd /opt/telegram-bot"
-echo ""
+# Создаем директорию если не существует
+mkdir -p "$PROJECT_DIR"
+cd "$PROJECT_DIR"
 
-echo "4️⃣ Копирование файлов (выполните на локальной машине):"
-echo "   scp -r ./* $VPS_USER@$VPS_IP:/opt/telegram-bot/"
-echo ""
+# Останавливаем бота
+echo "⏹️ Останавливаем бота..."
+sudo systemctl stop telegram-bot 2>/dev/null || pkill -f "python.*main.py" 2>/dev/null || true
+sleep 2
 
-echo "5️⃣ Настройка Python окружения:"
-echo "   python3 -m venv venv"
-echo "   source venv/bin/activate"
-echo "   pip install -r requirements.txt"
-echo ""
+# Получаем последние изменения
+echo "📥 Получаем последние изменения..."
+if [ -d ".git" ]; then
+    git fetch origin
+    git reset --hard origin/main
+    git clean -fd
+else
+    echo "❌ Git репозиторий не найден. Сначала клонируйте репозиторий."
+    exit 1
+fi
 
-echo "6️⃣ Создание .env файла:"
-echo "   nano .env"
-echo "   (скопируйте содержимое из env.example и заполните ваши токены)"
-echo ""
+# Создаем виртуальное окружение
+echo "🐍 Настраиваем Python окружение..."
+if [ ! -d "venv" ]; then
+    python3 -m venv venv
+fi
 
-echo "7️⃣ Создание systemd сервиса:"
-echo "   nano /etc/systemd/system/telegram-bot.service"
-echo "   (скопируйте содержимое из manual_deploy.md)"
-echo ""
+source venv/bin/activate
 
-echo "8️⃣ Запуск сервиса:"
-echo "   systemctl daemon-reload"
-echo "   systemctl enable telegram-bot"
-echo "   systemctl start telegram-bot"
-echo "   systemctl status telegram-bot"
-echo ""
+# Устанавливаем зависимости
+echo "📦 Устанавливаем зависимости..."
+pip install --upgrade pip
+pip install -r requirements.txt
 
-echo "9️⃣ Настройка nginx:"
-echo "   nano /etc/nginx/sites-available/telegram-bot"
-echo "   (скопируйте конфигурацию из manual_deploy.md)"
-echo "   ln -s /etc/nginx/sites-available/telegram-bot /etc/nginx/sites-enabled/"
-echo "   nginx -t && systemctl reload nginx"
-echo ""
+# Создаем .env файл если не существует
+if [ ! -f ".env" ]; then
+    echo "⚙️ Создаем .env файл..."
+    cat > .env << EOF
+# Telegram Bot
+TELEGRAM_BOT_TOKEN=your_bot_token_here
 
-echo "🔟 Настройка файрвола:"
-echo "   ufw allow 22 && ufw allow 80 && ufw allow 443"
-echo "   ufw --force enable"
-echo ""
+# Bitrix24
+BITRIX_WEBHOOK_URL=your_webhook_url_here
+BITRIX_USER_ID=your_user_id_here
 
-echo "✅ После выполнения всех шагов приложение будет доступно по адресу:"
-echo "   http://$VPS_IP"
-echo ""
+# Gemini AI
+GEMINI_API_KEY=your_gemini_api_key_here
 
-echo "📊 Для проверки статуса:"
-echo "   systemctl status telegram-bot"
-echo "   journalctl -u telegram-bot -f"
+# Database
+DATABASE_URL=sqlite:///bot.db
+
+# Logging
+LOG_LEVEL=INFO
+
+# Server
+PORT=3000
+USE_POLLING=true
+EOF
+    echo "⚠️ Не забудьте заполнить .env файл!"
+fi
+
+# Создаем systemd сервис
+echo "🔧 Настраиваем systemd сервис..."
+sudo tee /etc/systemd/system/telegram-bot.service > /dev/null << EOF
+[Unit]
+Description=Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=$PROJECT_DIR
+Environment=PATH=$PROJECT_DIR/venv/bin
+ExecStart=$PROJECT_DIR/venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Перезагружаем systemd и запускаем сервис
+echo "🔄 Перезагружаем systemd..."
+sudo systemctl daemon-reload
+sudo systemctl enable telegram-bot
+
+echo "✅ Деплой завершен!"
+echo "📝 Не забудьте:"
+echo "1. Заполнить .env файл с вашими токенами"
+echo "2. Запустить бота: sudo systemctl start telegram-bot"
+echo "3. Проверить статус: sudo systemctl status telegram-bot"
+echo "4. Посмотреть логи: sudo journalctl -u telegram-bot -f"
