@@ -23,20 +23,26 @@ class RealMeetingAutomation:
         """Настройка Chrome WebDriver для работы в headless режиме"""
         try:
             chrome_options = Options()
-            chrome_options.add_argument('--headless')
+            chrome_options.add_argument('--headless=new')
             chrome_options.add_argument('--no-sandbox')
             chrome_options.add_argument('--disable-dev-shm-usage')
             chrome_options.add_argument('--disable-gpu')
             chrome_options.add_argument('--window-size=1920,1080')
             chrome_options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36')
+            chrome_options.add_argument('--no-first-run')
+            chrome_options.add_argument('--no-default-browser-check')
+            chrome_options.add_argument('--disable-extensions')
+            chrome_options.add_argument('--disable-plugins')
+            chrome_options.add_argument('--disable-images')
+            chrome_options.add_argument('--disable-javascript')
+            chrome_options.add_argument('--disable-web-security')
+            chrome_options.add_argument('--allow-running-insecure-content')
+            chrome_options.add_argument('--disable-features=VizDisplayCompositor')
             
             # Настройки для аудио/видео
             chrome_options.add_argument('--use-fake-ui-for-media-stream')
             chrome_options.add_argument('--use-fake-device-for-media-stream')
             chrome_options.add_argument('--autoplay-policy=no-user-gesture-required')
-            chrome_options.add_argument('--allow-running-insecure-content')
-            chrome_options.add_argument('--disable-web-security')
-            chrome_options.add_argument('--disable-features=VizDisplayCompositor')
             
             # Автоматическое разрешение на микрофон и камеру
             prefs = {
@@ -62,11 +68,11 @@ class RealMeetingAutomation:
             self.driver.get(url)
             
             # Ждем загрузки страницы
-            time.sleep(5)
+            time.sleep(8)
             
             # Пытаемся найти и нажать "Launch Meeting"
             try:
-                launch_btn = WebDriverWait(self.driver, 10).until(
+                launch_btn = WebDriverWait(self.driver, 15).until(
                     EC.element_to_be_clickable((By.ID, "launch-btn"))
                 )
                 launch_btn.click()
@@ -74,17 +80,29 @@ class RealMeetingAutomation:
             except:
                 # Альтернативный способ - через ссылку "join from your browser"
                 try:
-                    browser_link = self.driver.find_element(By.LINK_TEXT, "join from your browser")
+                    browser_link = WebDriverWait(self.driver, 10).until(
+                        EC.element_to_be_clickable((By.LINK_TEXT, "join from your browser"))
+                    )
                     browser_link.click()
                     log.info("✅ Открыли встречу в браузере")
                 except:
-                    log.warning("⚠️ Не удалось найти кнопку запуска")
+                    # Еще один способ - через кнопку "Join from Browser"
+                    try:
+                        browser_btn = WebDriverWait(self.driver, 10).until(
+                            EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Join from Browser')]"))
+                        )
+                        browser_btn.click()
+                        log.info("✅ Нажали Join from Browser")
+                    except:
+                        log.warning("⚠️ Не удалось найти кнопку запуска")
             
-            time.sleep(5)
+            time.sleep(8)
             
             # Вводим имя участника
             try:
-                name_input = self.driver.find_element(By.ID, "input-for-name")
+                name_input = WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.ID, "input-for-name"))
+                )
                 name_input.clear()
                 name_input.send_keys("Bot Assistant")
                 log.info("✅ Ввели имя участника")
@@ -93,27 +111,41 @@ class RealMeetingAutomation:
             
             # Нажимаем "Join"
             try:
-                join_btn = self.driver.find_element(By.ID, "preview-join-button")
+                join_btn = WebDriverWait(self.driver, 10).until(
+                    EC.element_to_be_clickable((By.ID, "preview-join-button"))
+                )
                 join_btn.click()
                 log.info("✅ Нажали Join")
             except:
                 try:
-                    join_btn = self.driver.find_element(By.XPATH, "//button[contains(text(), 'Join')]")
+                    join_btn = WebDriverWait(self.driver, 10).until(
+                        EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Join')]"))
+                    )
                     join_btn.click()
                     log.info("✅ Нажали Join (альтернативный селектор)")
                 except:
                     log.warning("⚠️ Не удалось найти кнопку Join")
             
-            time.sleep(3)
+            time.sleep(5)
             
-            # Отключаем микрофон и камеру
+            # Подключаемся к аудио и отключаем микрофон
             try:
-                # Микрофон
-                mic_btn = self.driver.find_element(By.XPATH, "//button[contains(@class, 'join-audio-by-voip__join-btn')]")
+                # Сначала подключаемся к аудио
+                audio_btn = WebDriverWait(self.driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'join-audio-by-voip__join-btn')]"))
+                )
+                audio_btn.click()
+                log.info("✅ Подключились к аудио")
+                time.sleep(2)
+                
+                # Затем отключаем микрофон
+                mic_btn = WebDriverWait(self.driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@aria-label, 'Mute') or contains(@aria-label, 'Unmute')]"))
+                )
                 mic_btn.click()
-                log.info("✅ Подключили аудио")
+                log.info("✅ Отключили микрофон")
             except:
-                log.warning("⚠️ Не удалось настроить аудио")
+                log.warning("⚠️ Не удалось настроить аудио/микрофон")
             
             log.info("🎉 Успешно присоединились к Zoom встрече!")
             return True
@@ -276,7 +308,7 @@ class RealMeetingAutomation:
             log.error(f"❌ Ошибка остановки записи: {e}")
             return False
     
-    def join_meeting(self, url):
+    def join_meeting(self, url, display_name="Bot Assistant"):
         """Основная функция присоединения к встрече"""
         try:
             if not self.setup_chrome_driver():
@@ -308,6 +340,22 @@ class RealMeetingAutomation:
             
         except Exception as e:
             log.error(f"❌ Критическая ошибка присоединения к встрече: {e}")
+            return False
+    
+    def is_in_meeting(self):
+        """Проверка, находимся ли мы в встрече"""
+        try:
+            if not self.driver:
+                return False
+            
+            # Проверяем, что браузер еще открыт и на странице встречи
+            current_url = self.driver.current_url
+            meeting_indicators = ['zoom.us', 'meet.google.com', 'teams.microsoft.com', 'ktalk.ru', 'talk.kontur.ru']
+            
+            return any(indicator in current_url for indicator in meeting_indicators)
+            
+        except Exception as e:
+            log.error(f"❌ Ошибка при проверке статуса встречи: {e}")
             return False
     
     def leave_meeting(self):
