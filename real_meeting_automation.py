@@ -68,84 +68,161 @@ class RealMeetingAutomation:
             self.driver.get(url)
             
             # Ждем загрузки страницы
-            time.sleep(8)
+            time.sleep(10)
             
-            # Пытаемся найти и нажать "Launch Meeting"
-            try:
-                launch_btn = WebDriverWait(self.driver, 15).until(
-                    EC.element_to_be_clickable((By.ID, "launch-btn"))
-                )
-                launch_btn.click()
-                log.info("✅ Нажали Launch Meeting")
-            except:
-                # Альтернативный способ - через ссылку "join from your browser"
+            # Логируем текущий URL для отладки
+            current_url = self.driver.current_url
+            log.info(f"📍 Текущий URL: {current_url}")
+            
+            # Получаем HTML страницы для отладки
+            page_source = self.driver.page_source
+            log.info(f"📄 Размер HTML: {len(page_source)} символов")
+            
+            # Пытаемся найти различные варианты кнопок запуска
+            launch_selectors = [
+                (By.ID, "launch-btn"),
+                (By.CSS_SELECTOR, "[id='launch-btn']"),
+                (By.XPATH, "//button[contains(text(), 'Launch Meeting')]"),
+                (By.XPATH, "//button[contains(text(), 'Запустить встречу')]"),
+                (By.XPATH, "//a[contains(text(), 'join from your browser')]"),
+                (By.XPATH, "//a[contains(text(), 'Join from Browser')]"),
+                (By.XPATH, "//button[contains(text(), 'Join from Browser')]"),
+                (By.XPATH, "//a[contains(@href, 'zoom.us')]"),
+                (By.CSS_SELECTOR, "button[class*='launch']"),
+                (By.CSS_SELECTOR, "a[class*='launch']")
+            ]
+            
+            launch_clicked = False
+            for by, selector in launch_selectors:
                 try:
-                    browser_link = WebDriverWait(self.driver, 10).until(
-                        EC.element_to_be_clickable((By.LINK_TEXT, "join from your browser"))
+                    element = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((by, selector))
                     )
-                    browser_link.click()
-                    log.info("✅ Открыли встречу в браузере")
+                    element.click()
+                    log.info(f"✅ Нажали кнопку запуска: {selector}")
+                    launch_clicked = True
+                    break
                 except:
-                    # Еще один способ - через кнопку "Join from Browser"
-                    try:
-                        browser_btn = WebDriverWait(self.driver, 10).until(
-                            EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Join from Browser')]"))
-                        )
-                        browser_btn.click()
-                        log.info("✅ Нажали Join from Browser")
-                    except:
-                        log.warning("⚠️ Не удалось найти кнопку запуска")
+                    continue
             
-            time.sleep(8)
+            if not launch_clicked:
+                log.warning("⚠️ Не удалось найти кнопку запуска, пробуем альтернативные методы")
+                # Пробуем кликнуть по любому элементу с текстом "join" или "launch"
+                try:
+                    elements = self.driver.find_elements(By.XPATH, "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'join') or contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'launch')]")
+                    for element in elements:
+                        try:
+                            if element.is_displayed() and element.is_enabled():
+                                element.click()
+                                log.info("✅ Кликнули по элементу с текстом join/launch")
+                                launch_clicked = True
+                                break
+                        except:
+                            continue
+                except:
+                    pass
+            
+            time.sleep(10)
             
             # Вводим имя участника
-            try:
-                name_input = WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.ID, "input-for-name"))
-                )
-                name_input.clear()
-                name_input.send_keys("Bot Assistant")
-                log.info("✅ Ввели имя участника")
-            except:
+            name_selectors = [
+                (By.ID, "input-for-name"),
+                (By.CSS_SELECTOR, "input[placeholder*='name']"),
+                (By.CSS_SELECTOR, "input[placeholder*='имя']"),
+                (By.XPATH, "//input[@type='text']"),
+                (By.XPATH, "//input[contains(@class, 'name')]")
+            ]
+            
+            name_entered = False
+            for by, selector in name_selectors:
+                try:
+                    name_input = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((by, selector))
+                    )
+                    name_input.clear()
+                    name_input.send_keys("Bot Assistant")
+                    log.info(f"✅ Ввели имя участника: {selector}")
+                    name_entered = True
+                    break
+                except:
+                    continue
+            
+            if not name_entered:
                 log.warning("⚠️ Не удалось найти поле имени")
             
             # Нажимаем "Join"
-            try:
-                join_btn = WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.ID, "preview-join-button"))
-                )
-                join_btn.click()
-                log.info("✅ Нажали Join")
-            except:
+            join_selectors = [
+                (By.ID, "preview-join-button"),
+                (By.XPATH, "//button[contains(text(), 'Join')]"),
+                (By.XPATH, "//button[contains(text(), 'Присоединиться')]"),
+                (By.CSS_SELECTOR, "button[class*='join']"),
+                (By.CSS_SELECTOR, "button[type='submit']")
+            ]
+            
+            join_clicked = False
+            for by, selector in join_selectors:
                 try:
-                    join_btn = WebDriverWait(self.driver, 10).until(
-                        EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Join')]"))
+                    join_btn = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((by, selector))
                     )
                     join_btn.click()
-                    log.info("✅ Нажали Join (альтернативный селектор)")
+                    log.info(f"✅ Нажали Join: {selector}")
+                    join_clicked = True
+                    break
                 except:
-                    log.warning("⚠️ Не удалось найти кнопку Join")
+                    continue
             
-            time.sleep(5)
+            if not join_clicked:
+                log.warning("⚠️ Не удалось найти кнопку Join")
+            
+            time.sleep(8)
             
             # Подключаемся к аудио и отключаем микрофон
             try:
                 # Сначала подключаемся к аудио
-                audio_btn = WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'join-audio-by-voip__join-btn')]"))
-                )
-                audio_btn.click()
-                log.info("✅ Подключились к аудио")
-                time.sleep(2)
+                audio_selectors = [
+                    (By.XPATH, "//button[contains(@class, 'join-audio-by-voip__join-btn')]"),
+                    (By.XPATH, "//button[contains(text(), 'Join Audio')]"),
+                    (By.XPATH, "//button[contains(text(), 'Подключить звук')]"),
+                    (By.CSS_SELECTOR, "button[class*='audio']"),
+                    (By.CSS_SELECTOR, "button[class*='voip']")
+                ]
+                
+                for by, selector in audio_selectors:
+                    try:
+                        audio_btn = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((by, selector))
+                        )
+                        audio_btn.click()
+                        log.info(f"✅ Подключились к аудио: {selector}")
+                        time.sleep(2)
+                        break
+                    except:
+                        continue
                 
                 # Затем отключаем микрофон
-                mic_btn = WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@aria-label, 'Mute') or contains(@aria-label, 'Unmute')]"))
-                )
-                mic_btn.click()
-                log.info("✅ Отключили микрофон")
-            except:
-                log.warning("⚠️ Не удалось настроить аудио/микрофон")
+                mic_selectors = [
+                    (By.XPATH, "//button[contains(@aria-label, 'Mute')]"),
+                    (By.XPATH, "//button[contains(@aria-label, 'Unmute')]"),
+                    (By.XPATH, "//button[contains(text(), 'Mute')]"),
+                    (By.XPATH, "//button[contains(text(), 'Выключить звук')]"),
+                    (By.CSS_SELECTOR, "button[class*='mic']"),
+                    (By.CSS_SELECTOR, "button[class*='mute']")
+                ]
+                
+                for by, selector in mic_selectors:
+                    try:
+                        mic_btn = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((by, selector))
+                        )
+                        mic_btn.click()
+                        log.info(f"✅ Отключили микрофон: {selector}")
+                        break
+                    except:
+                        continue
+                        
+            except Exception as e:
+                log.warning(f"⚠️ Не удалось настроить аудио/микрофон: {e}")
             
             log.info("🎉 Успешно присоединились к Zoom встрече!")
             return True
@@ -160,50 +237,113 @@ class RealMeetingAutomation:
             log.info(f"🚀 Присоединяюсь к Google Meet: {url}")
             self.driver.get(url)
             
-            time.sleep(5)
+            time.sleep(10)
+            
+            # Логируем текущий URL для отладки
+            current_url = self.driver.current_url
+            log.info(f"📍 Текущий URL: {current_url}")
             
             # Вводим имя
-            try:
-                name_input = WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "input[placeholder*='name']"))
-                )
-                name_input.clear()
-                name_input.send_keys("Bot Assistant")
-                log.info("✅ Ввели имя")
-            except:
+            name_selectors = [
+                (By.CSS_SELECTOR, "input[placeholder*='name']"),
+                (By.CSS_SELECTOR, "input[placeholder*='имя']"),
+                (By.CSS_SELECTOR, "input[aria-label*='name']"),
+                (By.CSS_SELECTOR, "input[aria-label*='имя']"),
+                (By.XPATH, "//input[@type='text']"),
+                (By.XPATH, "//input[contains(@class, 'name')]")
+            ]
+            
+            name_entered = False
+            for by, selector in name_selectors:
+                try:
+                    name_input = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((by, selector))
+                    )
+                    name_input.clear()
+                    name_input.send_keys("Bot Assistant")
+                    log.info(f"✅ Ввели имя: {selector}")
+                    name_entered = True
+                    break
+                except:
+                    continue
+            
+            if not name_entered:
                 log.warning("⚠️ Не удалось найти поле имени")
             
             # Отключаем камеру и микрофон
             try:
                 # Камера
-                camera_btn = self.driver.find_element(By.CSS_SELECTOR, "[data-is-muted='false'][aria-label*='camera']")
-                camera_btn.click()
-                log.info("✅ Отключили камеру")
+                camera_selectors = [
+                    (By.CSS_SELECTOR, "[data-is-muted='false'][aria-label*='camera']"),
+                    (By.CSS_SELECTOR, "[data-is-muted='false'][aria-label*='камера']"),
+                    (By.XPATH, "//button[contains(@aria-label, 'camera')]"),
+                    (By.XPATH, "//button[contains(@aria-label, 'камера')]"),
+                    (By.CSS_SELECTOR, "button[class*='camera']")
+                ]
+                
+                for by, selector in camera_selectors:
+                    try:
+                        camera_btn = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((by, selector))
+                        )
+                        camera_btn.click()
+                        log.info(f"✅ Отключили камеру: {selector}")
+                        break
+                    except:
+                        continue
             except:
                 log.warning("⚠️ Камера уже отключена или не найдена")
             
             try:
                 # Микрофон
-                mic_btn = self.driver.find_element(By.CSS_SELECTOR, "[data-is-muted='false'][aria-label*='microphone']")
-                mic_btn.click()
-                log.info("✅ Отключили микрофон")
+                mic_selectors = [
+                    (By.CSS_SELECTOR, "[data-is-muted='false'][aria-label*='microphone']"),
+                    (By.CSS_SELECTOR, "[data-is-muted='false'][aria-label*='микрофон']"),
+                    (By.XPATH, "//button[contains(@aria-label, 'microphone')]"),
+                    (By.XPATH, "//button[contains(@aria-label, 'микрофон')]"),
+                    (By.CSS_SELECTOR, "button[class*='mic']")
+                ]
+                
+                for by, selector in mic_selectors:
+                    try:
+                        mic_btn = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((by, selector))
+                        )
+                        mic_btn.click()
+                        log.info(f"✅ Отключили микрофон: {selector}")
+                        break
+                    except:
+                        continue
             except:
                 log.warning("⚠️ Микрофон уже отключен или не найден")
             
             # Присоединяемся
-            try:
-                join_btn = WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.XPATH, "//span[text()='Join now']"))
-                )
-                join_btn.click()
-                log.info("✅ Нажали Join now")
-            except:
+            join_selectors = [
+                (By.XPATH, "//span[text()='Join now']"),
+                (By.XPATH, "//span[text()='Присоединиться сейчас']"),
+                (By.XPATH, "//button[contains(text(), 'Join now')]"),
+                (By.XPATH, "//button[contains(text(), 'Присоединиться')]"),
+                (By.XPATH, "//span[text()='Ask to join']"),
+                (By.XPATH, "//span[text()='Запросить присоединение']"),
+                (By.CSS_SELECTOR, "button[class*='join']"),
+                (By.CSS_SELECTOR, "button[type='submit']")
+            ]
+            
+            join_clicked = False
+            for by, selector in join_selectors:
                 try:
-                    join_btn = self.driver.find_element(By.XPATH, "//span[text()='Ask to join']")
+                    join_btn = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((by, selector))
+                    )
                     join_btn.click()
-                    log.info("✅ Запросили разрешение на присоединение")
+                    log.info(f"✅ Нажали кнопку присоединения: {selector}")
+                    join_clicked = True
+                    break
                 except:
-                    log.warning("⚠️ Не удалось найти кнопку присоединения")
+                    continue
+            
+            if not join_clicked:
+                log.warning("⚠️ Не удалось найти кнопку присоединения")
             
             log.info("🎉 Успешно присоединились к Google Meet!")
             return True
@@ -218,52 +358,135 @@ class RealMeetingAutomation:
             log.info(f"🚀 Присоединяюсь к Teams встрече: {url}")
             self.driver.get(url)
             
-            time.sleep(5)
+            time.sleep(10)
+            
+            # Логируем текущий URL для отладки
+            current_url = self.driver.current_url
+            log.info(f"📍 Текущий URL: {current_url}")
             
             # Выбираем "Join on the web instead"
-            try:
-                web_join = WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.LINK_TEXT, "Join on the web instead"))
-                )
-                web_join.click()
-                log.info("✅ Выбрали присоединение через веб")
-            except:
+            web_join_selectors = [
+                (By.LINK_TEXT, "Join on the web instead"),
+                (By.XPATH, "//a[contains(text(), 'Join on the web instead')]"),
+                (By.XPATH, "//a[contains(text(), 'Присоединиться через веб')]"),
+                (By.XPATH, "//button[contains(text(), 'Join on the web instead')]"),
+                (By.CSS_SELECTOR, "a[href*='teams.microsoft.com']")
+            ]
+            
+            web_join_clicked = False
+            for by, selector in web_join_selectors:
+                try:
+                    web_join = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((by, selector))
+                    )
+                    web_join.click()
+                    log.info(f"✅ Выбрали присоединение через веб: {selector}")
+                    web_join_clicked = True
+                    break
+                except:
+                    continue
+            
+            if not web_join_clicked:
                 log.warning("⚠️ Не удалось найти ссылку веб-присоединения")
             
-            time.sleep(3)
+            time.sleep(5)
             
             # Вводим имя
-            try:
-                name_input = self.driver.find_element(By.ID, "displayName")
-                name_input.clear()
-                name_input.send_keys("Bot Assistant")
-                log.info("✅ Ввели имя")
-            except:
+            name_selectors = [
+                (By.ID, "displayName"),
+                (By.CSS_SELECTOR, "input[placeholder*='name']"),
+                (By.CSS_SELECTOR, "input[placeholder*='имя']"),
+                (By.XPATH, "//input[@type='text']"),
+                (By.XPATH, "//input[contains(@class, 'name')]")
+            ]
+            
+            name_entered = False
+            for by, selector in name_selectors:
+                try:
+                    name_input = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((by, selector))
+                    )
+                    name_input.clear()
+                    name_input.send_keys("Bot Assistant")
+                    log.info(f"✅ Ввели имя: {selector}")
+                    name_entered = True
+                    break
+                except:
+                    continue
+            
+            if not name_entered:
                 log.warning("⚠️ Не удалось найти поле имени")
             
             # Отключаем камеру и микрофон
             try:
-                camera_btn = self.driver.find_element(By.ID, "preJoinCameraButton")
-                if "is-enabled" in camera_btn.get_attribute("class"):
-                    camera_btn.click()
-                    log.info("✅ Отключили камеру")
+                # Камера
+                camera_selectors = [
+                    (By.ID, "preJoinCameraButton"),
+                    (By.XPATH, "//button[contains(@aria-label, 'camera')]"),
+                    (By.XPATH, "//button[contains(@aria-label, 'камера')]"),
+                    (By.CSS_SELECTOR, "button[class*='camera']")
+                ]
+                
+                for by, selector in camera_selectors:
+                    try:
+                        camera_btn = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((by, selector))
+                        )
+                        if "is-enabled" in camera_btn.get_attribute("class"):
+                            camera_btn.click()
+                            log.info(f"✅ Отключили камеру: {selector}")
+                        break
+                    except:
+                        continue
             except:
                 log.warning("⚠️ Не удалось управлять камерой")
             
             try:
-                mic_btn = self.driver.find_element(By.ID, "preJoinMicButton")
-                if "is-enabled" in mic_btn.get_attribute("class"):
-                    mic_btn.click()
-                    log.info("✅ Отключили микрофон")
+                # Микрофон
+                mic_selectors = [
+                    (By.ID, "preJoinMicButton"),
+                    (By.XPATH, "//button[contains(@aria-label, 'microphone')]"),
+                    (By.XPATH, "//button[contains(@aria-label, 'микрофон')]"),
+                    (By.CSS_SELECTOR, "button[class*='mic']")
+                ]
+                
+                for by, selector in mic_selectors:
+                    try:
+                        mic_btn = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((by, selector))
+                        )
+                        if "is-enabled" in mic_btn.get_attribute("class"):
+                            mic_btn.click()
+                            log.info(f"✅ Отключили микрофон: {selector}")
+                        break
+                    except:
+                        continue
             except:
                 log.warning("⚠️ Не удалось управлять микрофоном")
             
             # Присоединяемся
-            try:
-                join_btn = self.driver.find_element(By.ID, "prejoin-join-button")
-                join_btn.click()
-                log.info("✅ Нажали Join now")
-            except:
+            join_selectors = [
+                (By.ID, "prejoin-join-button"),
+                (By.XPATH, "//button[contains(text(), 'Join now')]"),
+                (By.XPATH, "//button[contains(text(), 'Присоединиться')]"),
+                (By.CSS_SELECTOR, "button[class*='join']"),
+                (By.CSS_SELECTOR, "button[type='submit']")
+            ]
+            
+            join_clicked = False
+            for by, selector in join_selectors:
+                try:
+                    join_btn = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((by, selector))
+                    )
+                    join_btn.click()
+                    log.info(f"✅ Нажали кнопку присоединения: {selector}")
+                    join_clicked = True
+                    break
+                except:
+                    continue
+            
+            if not join_clicked:
                 log.warning("⚠️ Не удалось найти кнопку присоединения")
             
             log.info("🎉 Успешно присоединились к Teams встрече!")
@@ -271,6 +494,244 @@ class RealMeetingAutomation:
             
         except Exception as e:
             log.error(f"❌ Ошибка присоединения к Teams: {e}")
+            return False
+    
+    def join_kontur_talk(self, url):
+        """Присоединение к Контур.Толк встрече"""
+        try:
+            log.info(f"🚀 Присоединяюсь к Контур.Толк: {url}")
+            self.driver.get(url)
+            
+            time.sleep(10)
+            
+            # Логируем текущий URL для отладки
+            current_url = self.driver.current_url
+            log.info(f"📍 Текущий URL: {current_url}")
+            
+            # Пытаемся найти кнопки присоединения
+            join_selectors = [
+                (By.XPATH, "//button[contains(text(), 'Присоединиться')]"),
+                (By.XPATH, "//button[contains(text(), 'Join')]"),
+                (By.XPATH, "//a[contains(text(), 'Присоединиться')]"),
+                (By.XPATH, "//a[contains(text(), 'Join')]"),
+                (By.CSS_SELECTOR, "button[class*='join']"),
+                (By.CSS_SELECTOR, "a[class*='join']"),
+                (By.CSS_SELECTOR, "button[type='submit']")
+            ]
+            
+            join_clicked = False
+            for by, selector in join_selectors:
+                try:
+                    join_btn = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((by, selector))
+                    )
+                    join_btn.click()
+                    log.info(f"✅ Нажали кнопку присоединения: {selector}")
+                    join_clicked = True
+                    break
+                except:
+                    continue
+            
+            if not join_clicked:
+                log.warning("⚠️ Не удалось найти кнопку присоединения")
+            
+            time.sleep(5)
+            
+            # Вводим имя
+            name_selectors = [
+                (By.CSS_SELECTOR, "input[placeholder*='name']"),
+                (By.CSS_SELECTOR, "input[placeholder*='имя']"),
+                (By.CSS_SELECTOR, "input[placeholder*='Имя']"),
+                (By.XPATH, "//input[@type='text']"),
+                (By.XPATH, "//input[contains(@class, 'name')]")
+            ]
+            
+            name_entered = False
+            for by, selector in name_selectors:
+                try:
+                    name_input = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((by, selector))
+                    )
+                    name_input.clear()
+                    name_input.send_keys("Bot Assistant")
+                    log.info(f"✅ Ввели имя: {selector}")
+                    name_entered = True
+                    break
+                except:
+                    continue
+            
+            if not name_entered:
+                log.warning("⚠️ Не удалось найти поле имени")
+            
+            # Отключаем камеру и микрофон
+            try:
+                # Камера
+                camera_selectors = [
+                    (By.XPATH, "//button[contains(@aria-label, 'camera')]"),
+                    (By.XPATH, "//button[contains(@aria-label, 'камера')]"),
+                    (By.XPATH, "//button[contains(text(), 'Камера')]"),
+                    (By.CSS_SELECTOR, "button[class*='camera']")
+                ]
+                
+                for by, selector in camera_selectors:
+                    try:
+                        camera_btn = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((by, selector))
+                        )
+                        camera_btn.click()
+                        log.info(f"✅ Отключили камеру: {selector}")
+                        break
+                    except:
+                        continue
+            except:
+                log.warning("⚠️ Камера уже отключена или не найдена")
+            
+            try:
+                # Микрофон
+                mic_selectors = [
+                    (By.XPATH, "//button[contains(@aria-label, 'microphone')]"),
+                    (By.XPATH, "//button[contains(@aria-label, 'микрофон')]"),
+                    (By.XPATH, "//button[contains(text(), 'Микрофон')]"),
+                    (By.CSS_SELECTOR, "button[class*='mic']")
+                ]
+                
+                for by, selector in mic_selectors:
+                    try:
+                        mic_btn = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((by, selector))
+                        )
+                        mic_btn.click()
+                        log.info(f"✅ Отключили микрофон: {selector}")
+                        break
+                    except:
+                        continue
+            except:
+                log.warning("⚠️ Микрофон уже отключен или не найден")
+            
+            log.info("🎉 Успешно присоединились к Контур.Толк!")
+            return True
+            
+        except Exception as e:
+            log.error(f"❌ Ошибка присоединения к Контур.Толк: {e}")
+            return False
+    
+    def join_yandex_telemost(self, url):
+        """Присоединение к Яндекс Телемост встрече"""
+        try:
+            log.info(f"🚀 Присоединяюсь к Яндекс Телемост: {url}")
+            self.driver.get(url)
+            
+            time.sleep(10)
+            
+            # Логируем текущий URL для отладки
+            current_url = self.driver.current_url
+            log.info(f"📍 Текущий URL: {current_url}")
+            
+            # Пытаемся найти кнопки присоединения
+            join_selectors = [
+                (By.XPATH, "//button[contains(text(), 'Присоединиться')]"),
+                (By.XPATH, "//button[contains(text(), 'Join')]"),
+                (By.XPATH, "//a[contains(text(), 'Присоединиться')]"),
+                (By.XPATH, "//a[contains(text(), 'Join')]"),
+                (By.CSS_SELECTOR, "button[class*='join']"),
+                (By.CSS_SELECTOR, "a[class*='join']"),
+                (By.CSS_SELECTOR, "button[type='submit']")
+            ]
+            
+            join_clicked = False
+            for by, selector in join_selectors:
+                try:
+                    join_btn = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((by, selector))
+                    )
+                    join_btn.click()
+                    log.info(f"✅ Нажали кнопку присоединения: {selector}")
+                    join_clicked = True
+                    break
+                except:
+                    continue
+            
+            if not join_clicked:
+                log.warning("⚠️ Не удалось найти кнопку присоединения")
+            
+            time.sleep(5)
+            
+            # Вводим имя
+            name_selectors = [
+                (By.CSS_SELECTOR, "input[placeholder*='name']"),
+                (By.CSS_SELECTOR, "input[placeholder*='имя']"),
+                (By.CSS_SELECTOR, "input[placeholder*='Имя']"),
+                (By.XPATH, "//input[@type='text']"),
+                (By.XPATH, "//input[contains(@class, 'name')]")
+            ]
+            
+            name_entered = False
+            for by, selector in name_selectors:
+                try:
+                    name_input = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((by, selector))
+                    )
+                    name_input.clear()
+                    name_input.send_keys("Bot Assistant")
+                    log.info(f"✅ Ввели имя: {selector}")
+                    name_entered = True
+                    break
+                except:
+                    continue
+            
+            if not name_entered:
+                log.warning("⚠️ Не удалось найти поле имени")
+            
+            # Отключаем камеру и микрофон
+            try:
+                # Камера
+                camera_selectors = [
+                    (By.XPATH, "//button[contains(@aria-label, 'camera')]"),
+                    (By.XPATH, "//button[contains(@aria-label, 'камера')]"),
+                    (By.XPATH, "//button[contains(text(), 'Камера')]"),
+                    (By.CSS_SELECTOR, "button[class*='camera']")
+                ]
+                
+                for by, selector in camera_selectors:
+                    try:
+                        camera_btn = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((by, selector))
+                        )
+                        camera_btn.click()
+                        log.info(f"✅ Отключили камеру: {selector}")
+                        break
+                    except:
+                        continue
+            except:
+                log.warning("⚠️ Камера уже отключена или не найдена")
+            
+            try:
+                # Микрофон
+                mic_selectors = [
+                    (By.XPATH, "//button[contains(@aria-label, 'microphone')]"),
+                    (By.XPATH, "//button[contains(@aria-label, 'микрофон')]"),
+                    (By.XPATH, "//button[contains(text(), 'Микрофон')]"),
+                    (By.CSS_SELECTOR, "button[class*='mic']")
+                ]
+                
+                for by, selector in mic_selectors:
+                    try:
+                        mic_btn = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((by, selector))
+                        )
+                        mic_btn.click()
+                        log.info(f"✅ Отключили микрофон: {selector}")
+                        break
+                    except:
+                        continue
+            except:
+                log.warning("⚠️ Микрофон уже отключен или не найден")
+            
+            log.info("🎉 Успешно присоединились к Яндекс Телемост!")
+            return True
+            
+        except Exception as e:
+            log.error(f"❌ Ошибка присоединения к Яндекс Телемост: {e}")
             return False
     
     def start_audio_recording(self):
@@ -317,15 +778,16 @@ class RealMeetingAutomation:
             self.meeting_url = url
             
             # Определяем платформу и присоединяемся
-            if 'zoom.us' in url:
+            if 'zoom.us' in url or 'us05web.zoom.us' in url:
                 success = self.join_zoom_meeting(url)
             elif 'meet.google.com' in url:
                 success = self.join_google_meet(url)
             elif 'teams.microsoft.com' in url:
                 success = self.join_teams_meeting(url)
             elif 'ktalk.ru' in url or 'talk.kontur.ru' in url:
-                # Для Контур.Толк используем общий подход
-                success = self.join_zoom_meeting(url)  # Похожий интерфейс
+                success = self.join_kontur_talk(url)
+            elif 'telemost.yandex.ru' in url:
+                success = self.join_yandex_telemost(url)
             else:
                 log.warning("⚠️ Неподдерживаемая платформа встреч")
                 return False
@@ -350,7 +812,11 @@ class RealMeetingAutomation:
             
             # Проверяем, что браузер еще открыт и на странице встречи
             current_url = self.driver.current_url
-            meeting_indicators = ['zoom.us', 'meet.google.com', 'teams.microsoft.com', 'ktalk.ru', 'talk.kontur.ru']
+            meeting_indicators = [
+                'zoom.us', 'us05web.zoom.us', 'meet.google.com', 
+                'teams.microsoft.com', 'ktalk.ru', 'talk.kontur.ru',
+                'telemost.yandex.ru'
+            ]
             
             return any(indicator in current_url for indicator in meeting_indicators)
             
