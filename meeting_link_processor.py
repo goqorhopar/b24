@@ -11,7 +11,7 @@ import re
 from urllib.parse import urlparse
 
 from config import config
-from meeting_automation import create_meeting_automation
+from real_meeting_automation import meeting_automation
 from audio_capture import MeetingAudioRecorder
 from speech_transcriber import SpeechTranscriber
 from meeting_analyzer import MeetingAnalyzer
@@ -364,9 +364,7 @@ class MeetingLinkProcessor:
         try:
             # Инициализация автоматизации встреч
             if not self.meeting_automation:
-                self.meeting_automation = create_meeting_automation(
-                    headless=config.MEETING_HEADLESS
-                )
+                self.meeting_automation = meeting_automation
             
             # Инициализация захвата аудио
             if not self.audio_capture:
