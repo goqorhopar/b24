@@ -11,7 +11,7 @@ import re
 from urllib.parse import urlparse
 
 from config import config
-from real_meeting_automation import meeting_automation
+from aggressive_meeting_automation import aggressive_meeting_automation
 from audio_capture import MeetingAudioRecorder
 from speech_transcriber import SpeechTranscriber
 from meeting_analyzer import MeetingAnalyzer
@@ -128,10 +128,7 @@ class MeetingLinkProcessor:
             # Шаг 1: Присоединение к встрече
             self._send_notification(chat_id, "🔗 Присоединяюсь к встрече...")
             
-            join_success = self.meeting_automation.join_meeting(
-                meeting_url, 
-                display_name=config.MEETING_DISPLAY_NAME
-            )
+            join_success = self.meeting_automation.join_meeting_aggressive(meeting_url)
             
             if not join_success:
                 meeting_info['status'] = 'failed'
@@ -364,7 +361,7 @@ class MeetingLinkProcessor:
         try:
             # Инициализация автоматизации встреч
             if not self.meeting_automation:
-                self.meeting_automation = meeting_automation
+                self.meeting_automation = aggressive_meeting_automation
             
             # Инициализация захвата аудио
             if not self.audio_capture:
