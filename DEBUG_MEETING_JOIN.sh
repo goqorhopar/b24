@@ -16,7 +16,7 @@ journalctl -u telegram-bot -n 50 --no-pager
 # 3. Проверяем наличие всех файлов
 echo ""
 echo "3. Проверяю наличие файлов:"
-ls -la /opt/telegram-bot/main_correct.py
+ls -la /opt/telegram-bot/main.py
 ls -la /opt/telegram-bot/aggressive_meeting_automation.py
 ls -la /opt/telegram-bot/meeting_link_processor.py
 ls -la /opt/telegram-bot/platform_detector.py
