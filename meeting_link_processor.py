@@ -89,7 +89,7 @@ class MeetingLinkProcessor:
             self.active_meetings[chat_id] = meeting_info
             
             # Отправка уведомления о начале процесса
-            self._send_notification(chat_id, f"🚀 Начинаю присоединение к встрече на платформе {platform['name']}...")
+            self._send_notification(chat_id, f"🚀 Начинаю присоединение к встрече на платформе {platform['platform_name']}...")
             
             # Запуск встречи в отдельном потоке
             meeting_thread = threading.Thread(
@@ -102,7 +102,7 @@ class MeetingLinkProcessor:
             self.meeting_threads[chat_id] = meeting_thread
             
             result['success'] = True
-            result['message'] = f"✅ Запущено присоединение к встрече на {platform['name']}. Я сообщу о прогрессе."
+            result['message'] = f"✅ Запущено присоединение к встрече на {platform['platform_name']}. Я сообщу о прогрессе."
             result['meeting_id'] = meeting_id
             result['platform'] = platform
             
@@ -237,7 +237,7 @@ class MeetingLinkProcessor:
             analysis_result = self.meeting_analyzer.analyze_meeting(
                 transcript=transcript_text,
                 meeting_info={
-                    'platform': platform['name'],
+                    'platform': platform['platform_name'],
                     'meeting_id': meeting_info['meeting_id'],
                     'start_time': meeting_info['start_time'].isoformat()
                 }
@@ -512,7 +512,7 @@ class MeetingLinkProcessor:
                 "",
                 f"👤 **Инициатор:** {meeting_info.get('initiator_name', 'Unknown')}",
                 f"💬 **Chat ID:** {meeting_info.get('chat_id', 'Unknown')}",
-                f"🌐 **Платформа:** {meeting_info.get('platform', {}).get('name', 'Unknown')}",
+                f"🌐 **Платформа:** {meeting_info.get('platform', {}).get('platform_name', 'Unknown')}",
                 f"⏰ **Время начала:** {meeting_info.get('start_time', 'N/A')}",
                 f"📊 **Статус:** {meeting_info.get('status', 'Unknown')}",
                 ""
@@ -570,7 +570,7 @@ class MeetingLinkProcessor:
                 f"👤 **Инициатор:** {meeting_info.get('initiator_name', 'Unknown')}",
                 f"💬 **Chat ID:** {meeting_info.get('chat_id', 'Unknown')}",
                 f"🔢 **ID лида:** {lead_id}",
-                f"🌐 **Платформа:** {meeting_info.get('platform', {}).get('name', 'Unknown')}",
+                f"🌐 **Платформа:** {meeting_info.get('platform', {}).get('platform_name', 'Unknown')}",
                 ""
             ]
             
@@ -608,7 +608,7 @@ class MeetingLinkProcessor:
                 "",
                 f"👤 **Инициатор:** {meeting_info.get('initiator_name', 'Unknown')}",
                 f"💬 **Chat ID:** {meeting_info.get('chat_id', 'Unknown')}",
-                f"🌐 **Платформа:** {meeting_info.get('platform', {}).get('name', 'Unknown')}",
+                f"🌐 **Платформа:** {meeting_info.get('platform', {}).get('platform_name', 'Unknown')}",
                 f"⏰ **Время начала:** {meeting_info.get('start_time', 'N/A')}",
                 f"📊 **Статус:** {meeting_info.get('status', 'Unknown')}",
                 "",
