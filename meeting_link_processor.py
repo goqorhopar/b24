@@ -11,7 +11,7 @@ import re
 from urllib.parse import urlparse
 
 from config import config
-from aggressive_meeting_automation import aggressive_meeting_automation
+from aggressive_meeting_automation import meeting_automation
 from speech_transcriber import SpeechTranscriber
 from meeting_analyzer import MeetingAnalyzer
 from bitrix_meeting_integration import update_lead_from_meeting_analysis, create_meeting_follow_up_tasks
@@ -126,7 +126,7 @@ class MeetingLinkProcessor:
             # Шаг 1: Присоединение к встрече
             self._send_notification(chat_id, "🔗 Присоединяюсь к встрече...")
             
-            join_success = self.meeting_automation.join_meeting_aggressive(meeting_url)
+            join_success = self.meeting_automation.join_meeting(meeting_url)
             
             if not join_success:
                 meeting_info['status'] = 'failed'
@@ -361,7 +361,7 @@ class MeetingLinkProcessor:
         try:
             # Инициализация автоматизации встреч
             if not self.meeting_automation:
-                self.meeting_automation = aggressive_meeting_automation
+                self.meeting_automation = meeting_automation
 
             # Инициализация транскрибера
             if not self.speech_transcriber:
