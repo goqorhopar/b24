@@ -12,7 +12,6 @@ from urllib.parse import urlparse
 
 from config import config
 from aggressive_meeting_automation import aggressive_meeting_automation
-from audio_capture import MeetingAudioRecorder
 from speech_transcriber import SpeechTranscriber
 from meeting_analyzer import MeetingAnalyzer
 from bitrix_meeting_integration import update_lead_from_meeting_analysis, create_meeting_follow_up_tasks
@@ -25,7 +24,6 @@ class MeetingLinkProcessor:
     
     def __init__(self):
         self.meeting_automation = None
-        self.audio_capture = None
         self.speech_transcriber = None
         self.meeting_analyzer = None
         self.platform_detector = MeetingPlatformDetector()
@@ -142,7 +140,8 @@ class MeetingLinkProcessor:
             # Шаг 2: Начало записи аудио
             self._send_notification(chat_id, "🎙️ Начинаю запись аудио...")
             
-            audio_success = self.audio_capture.start_meeting_recording(meeting_url)
+            # Используем аудиозапись из агрессивной автоматизации (parecord)
+            audio_success = self.meeting_automation.start_audio_recording()
             if not audio_success:
                 meeting_info['status'] = 'audio_failed'
                 self._send_notification(chat_id, "❌ Не удалось начать запись аудио.")
@@ -206,11 +205,12 @@ class MeetingLinkProcessor:
             
             # Шаг 5: Остановка записи
             self._send_notification(chat_id, "⏹️ Останавливаю запись аудио...")
-            audio_file = self.audio_capture.stop_meeting_recording()
+            audio_success = self.meeting_automation.stop_audio_recording()
+            audio_file = f"/tmp/meeting_recording_{int(time.time())}.wav"  # Временный файл для совместимости
             
-            if not audio_file:
+            if not audio_success:
                 meeting_info['status'] = 'no_audio'
-                self._send_notification(chat_id, "❌ Не удалось получить записанное аудио.")
+                self._send_notification(chat_id, "❌ Не удалось остановить запись аудио.")
                 self._cleanup_meeting(chat_id)
                 return
             
@@ -362,21 +362,17 @@ class MeetingLinkProcessor:
             # Инициализация автоматизации встреч
             if not self.meeting_automation:
                 self.meeting_automation = aggressive_meeting_automation
-            
-            # Инициализация захвата аудио
-            if not self.audio_capture:
-                self.audio_capture = MeetingAudioRecorder()
-            
+
             # Инициализация транскрибера
             if not self.speech_transcriber:
                 self.speech_transcriber = SpeechTranscriber()
-            
+
             # Инициализация анализатора
             if not self.meeting_analyzer:
                 self.meeting_analyzer = MeetingAnalyzer()
-            
+
             return True
-            
+
         except Exception as e:
             log.error(f"Ошибка при инициализации компонентов: {e}")
             return False
