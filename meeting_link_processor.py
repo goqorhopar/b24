@@ -29,6 +29,7 @@ class MeetingLinkProcessor:
         self.speech_transcriber = None
         self.meeting_analyzer = None
         self.platform_detector = MeetingPlatformDetector()
+        self.platform_detector = MeetingPlatformDetector()
         self.active_meetings = {}  # {chat_id: meeting_info}
         self.meeting_threads = {}  # {chat_id: thread}
         
