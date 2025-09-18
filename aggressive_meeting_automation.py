@@ -278,20 +278,40 @@ class AggressiveMeetingAutomation:
                 return True
                 
             # Используем pulseaudio для записи системного аудио
-            # Сначала пробуем найти доступные устройства
+            # Сначала определяем доступные устройства
             try:
-                # Пробуем разные устройства
-                devices = [
-                    'alsa_output.pci-0000_00_1f.3.analog-stereo.monitor',
-                    'alsa_output.pci-0000_00_1b.0.analog-stereo.monitor',
-                    'alsa_output.usb-0_1bcf_2c8a_000000000000-00.analog-stereo.monitor',
-                    'pulse'
-                ]
+                # Получаем список доступных sink-мониторов
+                available_devices = []
+                
+                # Пробуем получить список устройств через pactl
+                try:
+                    result = subprocess.run(['pactl', 'list', 'short', 'sinks'], 
+                                          capture_output=True, text=True, timeout=5)
+                    if result.returncode == 0:
+                        for line in result.stdout.strip().split('\n'):
+                            if line and '.monitor' in line:
+                                device_name = line.split()[1]  # Второй столбец - имя устройства
+                                available_devices.append(device_name)
+                                log.info(f"🔍 Найдено аудиоустройство: {device_name}")
+                except Exception as e:
+                    log.warning(f"⚠️ Не удалось получить список устройств через pactl: {e}")
+                
+                # Если не нашли устройства через pactl, используем предустановленный список
+                if not available_devices:
+                    log.info("🔍 Используем предустановленный список устройств")
+                    available_devices = [
+                        'alsa_output.pci-0000_00_1f.3.analog-stereo.monitor',
+                        'alsa_output.pci-0000_00_1b.0.analog-stereo.monitor',
+                        'alsa_output.usb-0_1bcf_2c8a_000000000000-00.analog-stereo.monitor',
+                        'pulse'
+                    ]
                 
                 recording_file = f'/tmp/meeting_recording_{int(time.time())}.wav'
                 
-                for device in devices:
+                # Пробуем каждое устройство
+                for device in available_devices:
                     try:
+                        log.info(f"🎤 Пробуем устройство: {device}")
                         cmd = [
                             'parecord',
                             f'--device={device}',
@@ -309,22 +329,49 @@ class AggressiveMeetingAutomation:
                         )
                         
                         # Проверяем, что процесс запустился
-                        time.sleep(1)
+                        time.sleep(2)
                         if self.recording_process.poll() is None:
                             self.is_recording = True
                             self.recording_file = recording_file
-                            log.info(f"🎤 Начата запись аудио в файл: {recording_file}")
+                            log.info(f"🎤 Начата запись аудио в файл: {recording_file} (устройство: {device})")
                             return True
                         else:
-                            # Процесс завершился, пробуем следующее устройство
+                            # Процесс завершился, получаем ошибку
+                            stdout, stderr = self.recording_process.communicate()
+                            log.warning(f"⚠️ Устройство {device} не работает: {stderr.decode()}")
                             continue
                             
                     except Exception as e:
-                        log.warning(f"⚠️ Не удалось использовать устройство {device}: {e}")
+                        log.warning(f"⚠️ Ошибка с устройством {device}: {e}")
                         continue
                 
                 # Если ничего не сработало, пробуем без указания устройства
                 try:
+                    log.info("🎤 Пробуем запись без указания устройства")
+                    cmd = ['parecord', '--file-format=wav', '--channels=2', '--rate=44100', recording_file]
+                    self.recording_process = subprocess.Popen(
+                        cmd, 
+                        stdout=subprocess.PIPE, 
+                        stderr=subprocess.PIPE,
+                        preexec_fn=os.setsid
+                    )
+                    
+                    time.sleep(2)
+                    if self.recording_process.poll() is None:
+                        self.is_recording = True
+                        self.recording_file = recording_file
+                        log.info(f"🎤 Начата запись аудио (без указания устройства): {recording_file}")
+                        return True
+                    else:
+                        stdout, stderr = self.recording_process.communicate()
+                        log.error(f"❌ Запись без устройства не работает: {stderr.decode()}")
+                        
+                except Exception as e:
+                    log.error(f"❌ Не удалось запустить запись без устройства: {e}")
+                
+                # Последняя попытка - простейшая команда
+                try:
+                    log.info("🎤 Последняя попытка - простейшая команда parecord")
                     cmd = ['parecord', recording_file]
                     self.recording_process = subprocess.Popen(
                         cmd, 
@@ -333,15 +380,18 @@ class AggressiveMeetingAutomation:
                         preexec_fn=os.setsid
                     )
                     
-                    time.sleep(1)
+                    time.sleep(2)
                     if self.recording_process.poll() is None:
                         self.is_recording = True
                         self.recording_file = recording_file
-                        log.info(f"🎤 Начата запись аудио (устройство по умолчанию): {recording_file}")
+                        log.info(f"🎤 Начата запись аудио (простейшая команда): {recording_file}")
                         return True
+                    else:
+                        stdout, stderr = self.recording_process.communicate()
+                        log.error(f"❌ Простейшая команда не работает: {stderr.decode()}")
                         
                 except Exception as e:
-                    log.error(f"❌ Не удалось запустить запись с устройством по умолчанию: {e}")
+                    log.error(f"❌ Простейшая команда не запустилась: {e}")
                 
                 log.error("❌ Не удалось найти подходящее аудиоустройство для записи")
                 return False
