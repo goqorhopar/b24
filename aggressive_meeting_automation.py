@@ -273,24 +273,85 @@ class AggressiveMeetingAutomation:
     def start_audio_recording(self):
         """Начало записи аудио с системы"""
         try:
+            if self.is_recording:
+                log.info("🎤 Запись уже идет")
+                return True
+                
             # Используем pulseaudio для записи системного аудио
-            cmd = [
-                'parecord',
-                '--device=alsa_output.pci-0000_00_1f.3.analog-stereo.monitor',
-                '--file-format=wav',
-                '--channels=2',
-                '--rate=44100',
-                '--volume=65536',
-                f'/tmp/meeting_recording_{int(time.time())}.wav'
-            ]
-            
-            self.recording_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            self.is_recording = True
-            log.info("🎤 Начата запись аудио")
-            return True
-            
+            # Сначала пробуем найти доступные устройства
+            try:
+                # Пробуем разные устройства
+                devices = [
+                    'alsa_output.pci-0000_00_1f.3.analog-stereo.monitor',
+                    'alsa_output.pci-0000_00_1b.0.analog-stereo.monitor',
+                    'alsa_output.usb-0_1bcf_2c8a_000000000000-00.analog-stereo.monitor',
+                    'pulse'
+                ]
+                
+                recording_file = f'/tmp/meeting_recording_{int(time.time())}.wav'
+                
+                for device in devices:
+                    try:
+                        cmd = [
+                            'parecord',
+                            f'--device={device}',
+                            '--file-format=wav',
+                            '--channels=2',
+                            '--rate=44100',
+                            recording_file
+                        ]
+                        
+                        self.recording_process = subprocess.Popen(
+                            cmd, 
+                            stdout=subprocess.PIPE, 
+                            stderr=subprocess.PIPE,
+                            preexec_fn=os.setsid
+                        )
+                        
+                        # Проверяем, что процесс запустился
+                        time.sleep(1)
+                        if self.recording_process.poll() is None:
+                            self.is_recording = True
+                            self.recording_file = recording_file
+                            log.info(f"🎤 Начата запись аудио в файл: {recording_file}")
+                            return True
+                        else:
+                            # Процесс завершился, пробуем следующее устройство
+                            continue
+                            
+                    except Exception as e:
+                        log.warning(f"⚠️ Не удалось использовать устройство {device}: {e}")
+                        continue
+                
+                # Если ничего не сработало, пробуем без указания устройства
+                try:
+                    cmd = ['parecord', recording_file]
+                    self.recording_process = subprocess.Popen(
+                        cmd, 
+                        stdout=subprocess.PIPE, 
+                        stderr=subprocess.PIPE,
+                        preexec_fn=os.setsid
+                    )
+                    
+                    time.sleep(1)
+                    if self.recording_process.poll() is None:
+                        self.is_recording = True
+                        self.recording_file = recording_file
+                        log.info(f"🎤 Начата запись аудио (устройство по умолчанию): {recording_file}")
+                        return True
+                        
+                except Exception as e:
+                    log.error(f"❌ Не удалось запустить запись с устройством по умолчанию: {e}")
+                
+                log.error("❌ Не удалось найти подходящее аудиоустройство для записи")
+                return False
+                
+            except Exception as e:
+                log.error(f"❌ Ошибка настройки записи: {e}")
+                return False
+                
         except Exception as e:
-            log.error(f"❌ Ошибка начала записи: {e}")
+            log.error(f"❌ Общая ошибка начала записи: {e}")
             return False
     
     def stop_audio_recording(self):
@@ -300,6 +361,10 @@ class AggressiveMeetingAutomation:
                 self.recording_process.terminate()
                 self.is_recording = False
                 log.info("🛑 Запись аудио остановлена")
+                
+                # Возвращаем путь к файлу записи
+                if hasattr(self, 'recording_file') and self.recording_file:
+                    return self.recording_file
                 return True
         except Exception as e:
             log.error(f"❌ Ошибка остановки записи: {e}")
