@@ -25,12 +25,11 @@ def run_command(command: str) -> tuple[bool, str]:
         return False, str(e)
 
 def check_changes():
-    success, _ = run_command("git diff --quiet")
-    if success:
-        success, _ = run_command("git diff --cached --quiet")
-        if success:
-            return False
-    return True
+    # Проверяем есть ли изменения (включая новые файлы)
+    success, output = run_command("git status --porcelain")
+    if success and output.strip():
+        return True  # Есть изменения
+    return False  # Нет изменений
 
 def auto_commit():
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Обнаружены изменения, создаю коммит...")
