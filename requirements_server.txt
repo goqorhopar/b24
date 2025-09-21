@@ -1,0 +1,378 @@
+# Основные зависимости для серверного бота
+
+# Web Framework
+flask>=2.3.0
+requests>=2.31.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# Selenium для автоматизации браузера
+selenium>=4.15.0
+
+# AI и ML
+google-generativeai>=0.3.0
+openai-whisper>=20231117
+torch>=2.0.0
+torchaudio>=2.0.0
+numpy>=1.24.0
+
+# Аудио обработка
+sounddevice>=0.4.6
+soundfile>=0.12.1
+pyaudio>=0.2.11
+
+# Компьютерное зрение (для скриншотов)
+opencv-python>=4.8.0
+
+# Автоматизация GUI
+pyautogui>=0.9.54
+
+# Системная информация
+psutil>=5.9.0
+
+# Дополнительные утилиты
+Pillow>=10.0.0
+scipy>=1.11.0
+
+# Для работы с датами
+python-dateutil>=2.8.0
+
+# Для работы с JSON
+ujson>=5.8.0
+
+# Для работы с файлами
+pathlib2>=2.3.7
+
+# Для логирования
+colorlog>=6.7.0
+
+# Для работы с процессами
+subprocess32>=3.5.4; python_version < '3.3'
+
+# Для работы с сетью
+urllib3>=2.0.0
+
+# Для работы с временем
+pytz>=2023.3
+
+# Для работы с регулярными выражениями
+regex>=2023.8.8
+
+# Для работы с кодировками
+chardet>=5.2.0
+
+# Для работы с архивами
+zipfile36>=0.1.3; python_version < '3.6'
+
+# Для работы с конфигурацией
+configparser>=5.3.0
+
+# Для работы с базой данных
+sqlite3; python_version < '3.0'
+
+# Для работы с криптографией
+cryptography>=41.0.0
+
+# Для работы с SSL
+pyOpenSSL>=23.2.0
+
+# Для работы с HTTP
+httpx>=0.24.0
+
+# Для работы с асинхронностью
+asyncio; python_version < '3.4'
+
+# Для работы с потоками
+threading2>=0.1.2; python_version < '3.0'
+
+# Для работы с очередями
+queue2>=0.1.0; python_version < '3.0'
+
+# Для работы с временными файлами
+tempfile2>=0.1.0; python_version < '3.0'
+
+# Для работы с системными вызовами
+os2>=0.1.0; python_version < '3.0'
+
+# Для работы с путями
+pathlib2>=2.3.7; python_version < '3.4'
+
+# Для работы с JSON
+simplejson>=3.19.0
+
+# Для работы с XML
+lxml>=4.9.0
+
+# Для работы с CSV
+csv2>=0.1.0; python_version < '3.0'
+
+# Для работы с математикой
+math2>=0.1.0; python_version < '3.0'
+
+# Для работы со строками
+string2>=0.1.0; python_version < '3.0'
+
+# Для работы с коллекциями
+collections2>=0.1.0; python_version < '3.0'
+
+# Для работы с итераторами
+itertools2>=0.1.0; python_version < '3.0'
+
+# Для работы с функторами
+functools2>=0.1.0; python_version < '3.0'
+
+# Для работы с операторами
+operator2>=0.1.0; python_version < '3.0'
+
+# Для работы с типами
+typing2>=0.1.0; python_version < '3.0'
+
+# Для работы с абстрактными базовыми классами
+abc2>=0.1.0; python_version < '3.0'
+
+# Для работы с контекстными менеджерами
+contextlib2>=21.6.0; python_version < '3.0'
+
+# Для работы с декораторами
+decorator>=5.1.0
+
+# Для работы с метаклассами
+six>=1.16.0
+
+# Для работы с совместимостью версий
+future>=0.18.0
+
+# Для работы с обратной совместимостью
+backports>=1.0.0
+
+# Для работы с устаревшими модулями
+importlib-metadata>=6.0.0; python_version < '3.8'
+
+# Для работы с пакетами
+setuptools>=68.0.0
+
+# Для работы с wheel
+wheel>=0.41.0
+
+# Для работы с pip
+pip>=23.0.0
+
+# Для работы с virtualenv
+virtualenv>=20.0.0
+
+# Для работы с tox
+tox>=4.0.0
+
+# Для работы с pytest
+pytest>=7.4.0
+
+# Для работы с coverage
+coverage>=7.0.0
+
+# Для работы с flake8
+flake8>=6.0.0
+
+# Для работы с black
+black>=23.0.0
+
+# Для работы с isort
+isort>=5.12.0
+
+# Для работы с mypy
+mypy>=1.5.0
+
+# Для работы с pre-commit
+pre-commit>=3.0.0
+
+# Для работы с docker
+docker>=6.1.0
+
+# Для работы с kubernetes
+kubernetes>=28.0.0
+
+# Для работы с prometheus
+prometheus-client>=0.17.0
+
+# Для работы с grafana
+grafana-api>=1.0.0
+
+# Для работы с elasticsearch
+elasticsearch>=8.0.0
+
+# Для работы с redis
+redis>=4.6.0
+
+# Для работы с postgresql
+psycopg2-binary>=2.9.0
+
+# Для работы с mysql
+PyMySQL>=1.1.0
+
+# Для работы с mongodb
+pymongo>=4.5.0
+
+# Для работы с sqlite
+sqlite3; python_version < '3.0'
+
+# Для работы с alembic
+alembic>=1.12.0
+
+# Для работы с sqlalchemy
+SQLAlchemy>=2.0.0
+
+# Для работы с pandas
+pandas>=2.1.0
+
+# Для работы с matplotlib
+matplotlib>=3.7.0
+
+# Для работы с seaborn
+seaborn>=0.12.0
+
+# Для работы с plotly
+plotly>=5.15.0
+
+# Для работы с bokeh
+bokeh>=3.2.0
+
+# Для работы с dash
+dash>=2.14.0
+
+# Для работы с streamlit
+streamlit>=1.25.0
+
+# Для работы с jupyter
+jupyter>=1.0.0
+
+# Для работы с ipython
+ipython>=8.0.0
+
+# Для работы с notebook
+notebook>=7.0.0
+
+# Для работы с lab
+jupyterlab>=4.0.0
+
+# Для работы с voila
+voila>=0.5.0
+
+# Для работы с nbconvert
+nbconvert>=7.0.0
+
+# Для работы с nbformat
+nbformat>=5.8.0
+
+# Для работы с ipywidgets
+ipywidgets>=8.0.0
+
+# Для работы с ipykernel
+ipykernel>=6.0.0
+
+# Для работы с ipyparallel
+ipyparallel>=8.0.0
+
+# Для работы с ipyvolume
+ipyvolume>=0.6.0
+
+# Для работы с ipyleaflet
+ipyleaflet>=0.17.0
+
+# Для работы с ipyvuetify
+ipyvuetify>=1.8.0
+
+# Для работы с ipyaggrid
+ipyaggrid>=0.2.0
+
+# Для работы с ipydatagrid
+ipydatagrid>=1.1.0
+
+# Для работы с ipytree
+ipytree>=0.2.0
+
+# Для работы с ipycanvas
+ipycanvas>=0.10.0
+
+# Для работы с ipycytoscape
+ipycytoscape>=1.3.0
+
+# Для работы с ipydrawio
+ipydrawio>=0.1.0
+
+# Для работы с ipygany
+ipygany>=0.5.0
+
+# Для работы с ipygraph
+ipygraph>=0.1.0
+
+# Для работы с ipyk3d
+ipyk3d>=0.1.0
+
+# Для работы с ipympl
+ipympl>=0.9.0
+
+# Для работы с ipysheet
+ipysheet>=0.5.0
+
+# Для работы с ipyspin
+ipyspin>=0.1.0
+
+# Для работы с ipytable
+ipytable>=0.1.0
+
+# Для работы с ipytree
+ipytree>=0.2.0
+
+# Для работы с ipywebrtc
+ipywebrtc>=0.6.0
+
+# Для работы с ipywidgets
+ipywidgets>=8.0.0
+
+# Для работы с ipyvuetify
+ipyvuetify>=1.8.0
+
+# Для работы с ipyaggrid
+ipyaggrid>=0.2.0
+
+# Для работы с ipydatagrid
+ipydatagrid>=1.1.0
+
+# Для работы с ipytree
+ipytree>=0.2.0
+
+# Для работы с ipycanvas
+ipycanvas>=0.10.0
+
+# Для работы с ipycytoscape
+ipycytoscape>=1.3.0
+
+# Для работы с ipydrawio
+ipydrawio>=0.1.0
+
+# Для работы с ipygany
+ipygany>=0.5.0
+
+# Для работы с ipygraph
+ipygraph>=0.1.0
+
+# Для работы с ipyk3d
+ipyk3d>=0.1.0
+
+# Для работы с ipympl
+ipympl>=0.9.0
+
+# Для работы с ipysheet
+ipysheet>=0.5.0
+
+# Для работы с ipyspin
+ipyspin>=0.1.0
+
+# Для работы с ipytable
+ipytable>=0.1.0
+
+# Для работы с ipytree
+ipytree>=0.2.0
+
+# Для работы с ipywebrtc
+ipywebrtc>=0.6.0

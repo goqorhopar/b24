@@ -11,7 +11,7 @@ import re
 from urllib.parse import urlparse
 
 from config import config
-from aggressive_meeting_automation import meeting_automation
+from aggressive_meeting_automation import AggressiveMeetingAutomation
 from speech_transcriber import SpeechTranscriber
 from meeting_analyzer import MeetingAnalyzer
 from bitrix_meeting_integration import update_lead_from_meeting_analysis, create_meeting_follow_up_tasks
@@ -23,9 +23,9 @@ class MeetingLinkProcessor:
     """Класс для обработки ссылок на встречи и автоматического участия"""
     
     def __init__(self):
-        self.meeting_automation = None
-        self.speech_transcriber = None
-        self.meeting_analyzer = None
+        self.meeting_automation = AggressiveMeetingAutomation()
+        self.speech_transcriber = SpeechTranscriber()
+        self.meeting_analyzer = MeetingAnalyzer()
         self.platform_detector = MeetingPlatformDetector()
         self.active_meetings = {}  # {chat_id: meeting_info}
         self.meeting_threads = {}  # {chat_id: thread}
@@ -126,7 +126,8 @@ class MeetingLinkProcessor:
             # Шаг 1: Присоединение к встрече
             self._send_notification(chat_id, "🔗 Присоединяюсь к встрече...")
             
-            join_success = self.meeting_automation.join_meeting(meeting_url)
+            # Используем агрессивную автоматизацию для присоединения
+            join_success = self.meeting_automation.join_meeting_aggressive(meeting_url)
             
             if not join_success:
                 meeting_info['status'] = 'failed'
@@ -205,12 +206,18 @@ class MeetingLinkProcessor:
             
             # Шаг 5: Остановка записи
             self._send_notification(chat_id, "⏹️ Останавливаю запись аудио...")
-            audio_success = self.meeting_automation.stop_audio_recording()
-            audio_file = f"/tmp/meeting_recording_{int(time.time())}.wav"  # Временный файл для совместимости
+            audio_file = self.meeting_automation.stop_audio_recording()
             
-            if not audio_success:
+            if not audio_file:
                 meeting_info['status'] = 'no_audio'
-                self._send_notification(chat_id, "❌ Не удалось остановить запись аудио.")
+                self._send_notification(chat_id, "❌ Не удалось получить записанный аудиофайл.")
+                self._cleanup_meeting(chat_id)
+                return
+            
+            # Проверяем, что файл существует
+            if not os.path.exists(audio_file):
+                meeting_info['status'] = 'no_audio'
+                self._send_notification(chat_id, "❌ Аудиофайл не найден.")
                 self._cleanup_meeting(chat_id)
                 return
             
@@ -218,44 +225,91 @@ class MeetingLinkProcessor:
             self._send_notification(chat_id, "📝 Начинаю транскрипцию аудио...")
             
             # Шаг 6: Транскрипция аудио
-            transcript_result = self.speech_transcriber.transcribe_file(audio_file)
+            self._send_notification(chat_id, "🎤 Начинаю транскрипцию аудио...")
             
-            if not transcript_result or not transcript_result.get('text'):
+            # Проверяем существование файла
+            if not os.path.exists(audio_file):
                 meeting_info['status'] = 'transcription_failed'
-                self._send_notification(chat_id, "❌ Не удалось выполнить транскрипцию аудио.")
+                self._send_notification(chat_id, f"❌ Аудиофайл не найден: {audio_file}")
                 self._cleanup_meeting(chat_id)
                 return
             
-            transcript_text = transcript_result['text']
-            meeting_info['transcript'] = transcript_text
+            # Проверяем размер файла
+            file_size = os.path.getsize(audio_file)
+            if file_size < 1024:  # Меньше 1KB
+                meeting_info['status'] = 'transcription_failed'
+                self._send_notification(chat_id, "❌ Аудиофайл слишком мал, возможно запись не удалась")
+                self._cleanup_meeting(chat_id)
+                return
+            
+            self._send_notification(chat_id, f"📁 Размер аудиофайла: {file_size / 1024:.1f} KB")
+            
+            try:
+                transcript_result = self.speech_transcriber.transcribe_file(audio_file)
+                
+                if not transcript_result or not transcript_result.get('text'):
+                    meeting_info['status'] = 'transcription_failed'
+                    self._send_notification(chat_id, "❌ Не удалось выполнить транскрипцию аудио.")
+                    self._cleanup_meeting(chat_id)
+                    return
+                
+                transcript_text = transcript_result['text']
+                if len(transcript_text.strip()) < 10:
+                    meeting_info['status'] = 'transcription_failed'
+                    self._send_notification(chat_id, "❌ Транскрипт слишком короткий, возможно аудио не содержит речи")
+                    self._cleanup_meeting(chat_id)
+                    return
+                
+                meeting_info['transcript'] = transcript_text
+                self._send_notification(chat_id, f"✅ Транскрипция завершена! Длина: {len(transcript_text)} символов")
+                
+            except Exception as e:
+                meeting_info['status'] = 'transcription_failed'
+                self._send_notification(chat_id, f"❌ Ошибка транскрипции: {str(e)}")
+                self._cleanup_meeting(chat_id)
+                return
             
             self._send_notification(chat_id, f"✅ Транскрипция завершена. Длина: {len(transcript_text)} символов.")
             
-            # Шаг 7: Анализ встречи
-            self._send_notification(chat_id, "🧠 Начинаю анализ встречи...")
+            # Шаг 7: Анализ встречи с чек-листом
+            self._send_notification(chat_id, "🧠 Начинаю анализ встречи с использованием чек-листа...")
             
-            analysis_result = self.meeting_analyzer.analyze_meeting(
-                transcript=transcript_text,
-                meeting_info={
-                    'platform': platform['platform_name'],
-                    'meeting_id': meeting_info['meeting_id'],
-                    'start_time': meeting_info['start_time'].isoformat()
-                }
-            )
-            
-            if not analysis_result:
+            try:
+                # Используем MeetingAnalyzer для анализа с чек-листом
+                from meeting_analyzer import MeetingAnalyzer
+                analyzer = MeetingAnalyzer()
+                
+                # Анализируем встречу с чек-листом
+                analysis_result = analyzer.analyze_meeting_with_checklist(
+                    transcript_text, 
+                    checklist_type='sales_meeting'  # Можно настроить тип чек-листа
+                )
+                
+                if not analysis_result:
+                    meeting_info['status'] = 'analysis_failed'
+                    self._send_notification(chat_id, "❌ Не удалось выполнить анализ встречи.")
+                    self._cleanup_meeting(chat_id)
+                    return
+                
+                meeting_info['analysis'] = analysis_result
+                meeting_info['status'] = 'analyzed'
+                
+                # Отправляем краткий отчет о результатах
+                score = analysis_result.get('score', 0)
+                self._send_notification(chat_id, f"✅ Анализ завершен! Оценка встречи: {score}/100 баллов")
+                
+            except Exception as e:
+                log.error(f"Ошибка анализа встречи: {e}")
                 meeting_info['status'] = 'analysis_failed'
-                self._send_notification(chat_id, "❌ Не удалось выполнить анализ встречи.")
+                self._send_notification(chat_id, f"❌ Ошибка анализа встречи: {e}")
                 self._cleanup_meeting(chat_id)
                 return
             
-            meeting_info['analysis'] = analysis_result
-            meeting_info['status'] = 'analyzed'
-            
-            self._send_notification(chat_id, "✅ Анализ встречи завершен!")
-            
             # Шаг 8: Отправка анализа пользователю
             self._send_analysis_to_user(chat_id, analysis_result)
+            
+            # Отправляем детальный анализ
+            self._send_detailed_analysis(chat_id, analysis_result)
             
             # Шаг 9: Запрос ID лида
             self._send_notification(chat_id, "🔍 Пожалуйста, отправьте ID лида в Bitrix24 для обновления:")
@@ -304,29 +358,47 @@ class MeetingLinkProcessor:
             # Обновление лида
             self._send_notification(chat_id, f"🔄 Обновляю лид {lead_id} на основе анализа встречи...")
             
-            lead_update_result = update_lead_from_meeting_analysis(lead_id, analysis)
-            
-            if lead_update_result.get('updated') or lead_update_result.get('meeting_data_processed'):
-                result['success'] = True
-                result['message'] = f"✅ Лид {lead_id} успешно обновлен!"
-                result['lead_update_result'] = lead_update_result
+            try:
+                lead_update_result = update_lead_from_meeting_analysis(lead_id, analysis)
                 
-                # Дополнительная информация
-                if lead_update_result.get('task_created'):
-                    tasks = lead_update_result.get('tasks', [])
-                    result['message'] += f"\n🗓 Создано задач: {len(tasks)}"
-                
-                if lead_update_result.get('comment_updated'):
-                    result['message'] += "\n💬 Комментарий обновлен"
-                
-                # Уведомление администратора об успешном обновлении
-                self._notify_admin_about_lead_update(meeting_info, lead_id, lead_update_result)
-                
-                # Очистка после успешного обновления
-                self._cleanup_meeting(chat_id)
-                
-            else:
-                result['message'] = f"⚠️ Не удалось обновить лид {lead_id}. Проверьте ID и попробуйте снова."
+                if lead_update_result.get('updated') or lead_update_result.get('meeting_data_processed'):
+                    result['success'] = True
+                    result['message'] = f"✅ Лид {lead_id} успешно обновлен!"
+                    result['lead_update_result'] = lead_update_result
+                    
+                    # Дополнительная информация
+                    if lead_update_result.get('task_created'):
+                        tasks = lead_update_result.get('tasks', [])
+                        if tasks:
+                            task_info = f"Создано задач: {len(tasks)}"
+                            for task in tasks[:3]:  # Показываем только первые 3
+                                task_info += f"\n• {task.get('title', 'Без названия')}"
+                            result['message'] += f"\n\n📋 {task_info}"
+                    
+                    if lead_update_result.get('comment_updated'):
+                        result['message'] += "\n💬 Комментарий обновлен"
+                    
+                    # Показываем обновленные поля
+                    fields_updated = lead_update_result.get('fields_updated', [])
+                    if fields_updated:
+                        fields_info = f"Обновлено полей: {len(fields_updated)}"
+                        for field in fields_updated[:5]:  # Показываем только первые 5
+                            fields_info += f"\n• {field}"
+                        result['message'] += f"\n\n📝 {fields_info}"
+                    
+                    # Уведомление администратора об успешном обновлении
+                    self._notify_admin_about_lead_update(meeting_info, lead_id, lead_update_result)
+                    
+                    # Очистка после успешного обновления
+                    self._cleanup_meeting(chat_id)
+                    
+                else:
+                    result['message'] = f"⚠️ Не удалось обновить лид {lead_id}. Проверьте ID и попробуйте снова."
+                    result['lead_update_result'] = lead_update_result
+                    
+            except Exception as e:
+                log.error(f"Ошибка при обновлении лида {lead_id}: {e}")
+                result['message'] = f"❌ Ошибка при обновлении лида: {e}"
             
         except Exception as e:
             log.error(f"Ошибка при обновлении лида: {e}")
@@ -398,6 +470,47 @@ class MeetingLinkProcessor:
             self._send_notification(chat_id, analysis_text)
         except Exception as e:
             log.error(f"Ошибка при отправке анализа пользователю: {e}")
+    
+    def _send_detailed_analysis(self, chat_id: int, analysis: Dict[str, Any]):
+        """
+        Отправка детального анализа с чек-листом
+        """
+        try:
+            # Основные результаты
+            score = analysis.get('score', 0)
+            checklist_responses = analysis.get('checklist_responses', {})
+            
+            message = f"📊 **Детальный анализ встречи**\n\n"
+            message += f"🎯 **Общая оценка: {score}/100 баллов**\n\n"
+            
+            # Результаты чек-листа
+            if checklist_responses:
+                message += "📋 **Результаты чек-листа:**\n"
+                for item, response in checklist_responses.items():
+                    status = "✅" if response else "❌"
+                    message += f"{status} {item}\n"
+                message += "\n"
+            
+            # Ключевые выводы
+            key_findings = analysis.get('key_findings', [])
+            if key_findings:
+                message += "🔍 **Ключевые выводы:**\n"
+                for finding in key_findings[:5]:  # Показываем только первые 5
+                    message += f"• {finding}\n"
+                message += "\n"
+            
+            # Рекомендации
+            recommendations = analysis.get('recommendations', [])
+            if recommendations:
+                message += "💡 **Рекомендации:**\n"
+                for rec in recommendations[:3]:  # Показываем только первые 3
+                    message += f"• {rec}\n"
+            
+            self._send_notification(chat_id, message)
+            
+        except Exception as e:
+            log.error(f"Ошибка при отправке детального анализа: {e}")
+            self._send_notification(chat_id, f"❌ Ошибка при отправке детального анализа: {e}")
     
     def _format_analysis_for_telegram(self, analysis: Dict[str, Any]) -> str:
         """

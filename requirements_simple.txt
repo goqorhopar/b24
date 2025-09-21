@@ -1,0 +1,38 @@
+# Основные зависимости для серверного бота
+
+# Web Framework
+flask>=2.3.0
+requests>=2.31.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# Selenium для автоматизации браузера
+selenium>=4.15.0
+
+# AI и ML
+google-generativeai>=0.3.0
+openai-whisper>=20231117
+torch>=2.0.0
+torchaudio>=2.0.0
+numpy>=1.24.0
+
+# Аудио обработка
+sounddevice>=0.4.6
+soundfile>=0.12.1
+pyaudio>=0.2.11
+
+# Компьютерное зрение
+opencv-python>=4.8.0
+
+# Автоматизация GUI
+pyautogui>=0.9.54
+
+# Системная информация
+psutil>=5.9.0
+
+# Дополнительные утилиты
+Pillow>=10.0.0
+scipy>=1.11.0
+python-dateutil>=2.8.0
+colorlog>=6.7.0

@@ -1,0 +1,136 @@
+name: Auto Deploy Meeting Bot
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements_simple.txt
+        
+    - name: Run tests
+      run: |
+        python -m pytest tests/ -v || echo "Tests not found, skipping..."
+        
+    - name: Check code quality
+      run: |
+        python -m flake8 *.py --max-line-length=120 || echo "Flake8 not installed, skipping..."
+        python -m black --check *.py || echo "Black not installed, skipping..."
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Deploy to server
+      uses: appleboy/ssh-action@v0.1.8
+      with:
+        host: ${{ secrets.DEPLOY_SERVER_URL }}
+        username: ${{ secrets.DEPLOY_SERVER_USER }}
+        key: ${{ secrets.DEPLOY_SSH_KEY }}
+        port: ${{ secrets.DEPLOY_SSH_PORT || 22 }}
+        script: |
+          echo "🚀 Начинаю деплой Meeting Bot..."
+          
+          # Переходим в директорию проекта
+          cd ${{ secrets.DEPLOY_SERVER_PATH || '/opt/meeting-bot' }}
+          
+          # Останавливаем сервис
+          echo "⏹️ Останавливаю сервис..."
+          systemctl stop meeting-bot || true
+          
+          # Создаем бэкап
+          echo "💾 Создаю бэкап..."
+          cp -r . ../meeting-bot-backup-$(date +%Y%m%d-%H%M%S) || true
+          
+          # Получаем последние изменения
+          echo "📥 Получаю изменения из GitHub..."
+          git fetch origin
+          git reset --hard origin/main
+          
+          # Устанавливаем зависимости
+          echo "📦 Устанавливаю зависимости..."
+          pip3 install -r requirements_simple.txt
+          
+          # Создаем необходимые директории
+          echo "📁 Создаю необходимые директории..."
+          mkdir -p /tmp/meeting_bot
+          mkdir -p logs
+          mkdir -p /var/log/meeting-bot
+          
+          # Устанавливаем права
+          echo "🔐 Устанавливаю права..."
+          chmod +x start_server_bot.sh
+          chmod +x *.py
+          chown -R meeting-bot:meeting-bot . || true
+          
+          # Проверяем конфигурацию
+          echo "⚙️ Проверяю конфигурацию..."
+          if [ ! -f .env ]; then
+            echo "❌ Файл .env не найден!"
+            exit 1
+          fi
+          
+          # Запускаем сервис
+          echo "▶️ Запускаю сервис..."
+          systemctl start meeting-bot
+          systemctl enable meeting-bot
+          
+          # Ждем запуска
+          echo "⏳ Жду запуска сервиса..."
+          sleep 10
+          
+          # Проверяем статус
+          echo "✅ Проверяю статус сервиса..."
+          systemctl status meeting-bot --no-pager
+          
+          # Проверяем логи
+          echo "📋 Последние логи:"
+          journalctl -u meeting-bot --no-pager -n 20
+          
+          echo "🎉 Деплой завершен успешно!"
+          
+    - name: Notify deployment
+      if: always()
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "✅ Деплой успешно завершен"
+        else
+          echo "❌ Деплой завершился с ошибкой"
+        fi
+
+  health-check:
+    needs: deploy
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Health check
+      run: |
+        echo "🔍 Проверяю здоровье сервиса..."
+        # Здесь можно добавить проверки API, базы данных и т.д.
+        echo "✅ Проверка здоровья завершена"

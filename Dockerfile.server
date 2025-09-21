@@ -1,0 +1,56 @@
+# Dockerfile для серверного бота
+FROM ubuntu:22.04
+
+# Установка системных зависимостей
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    git \
+    curl \
+    wget \
+    chromium-browser \
+    chromium-chromedriver \
+    ffmpeg \
+    portaudio19-dev \
+    pulseaudio \
+    pulseaudio-utils \
+    alsa-utils \
+    xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+# Создание пользователя для безопасности
+RUN useradd -m -s /bin/bash botuser
+
+# Создание рабочей директории
+WORKDIR /app
+
+# Копирование файлов проекта
+COPY . .
+
+# Установка Python зависимостей
+RUN pip3 install --no-cache-dir -r requirements_simple.txt
+
+# Создание директории для временных файлов
+RUN mkdir -p /tmp/meeting_bot && chown -R botuser:botuser /tmp/meeting_bot
+
+# Настройка прав доступа
+RUN chown -R botuser:botuser /app
+
+# Переключение на пользователя botuser
+USER botuser
+
+# Настройка переменных окружения
+ENV PYTHONPATH=/app
+ENV DISPLAY=:99
+ENV CHROME_BIN=/usr/bin/chromium-browser
+ENV CHROME_PATH=/usr/bin/chromium-browser
+
+# Создание виртуального дисплея
+RUN Xvfb :99 -screen 0 1920x1080x24 &
+
+# Открытие портов
+EXPOSE 3000 9090
+
+# Команда запуска
+CMD ["python3", "main_server_bot.py"]

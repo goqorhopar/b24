@@ -160,20 +160,51 @@ class AggressiveMeetingAutomation:
             self.meeting_url = url
             self.driver.get(url)
             
-            # Ждем загрузки
-            time.sleep(15)
+            # Активно ждем загрузки с проверками
+            log.info("⏳ Ждем загрузки страницы Zoom...")
+            for i in range(12):  # 12 попыток по 5 секунд = 60 секунд
+                time.sleep(5)
+                try:
+                    current_url = self.driver.current_url
+                    page_title = self.driver.title
+                    log.info(f"🔄 Попытка {i+1}/12: URL={current_url[:50]}..., Title={page_title[:30]}...")
+                    
+                    # Проверяем, загрузилась ли страница
+                    if "zoom.us" in current_url and page_title:
+                        log.info("✅ Страница Zoom загружена!")
+                        break
+                except Exception as e:
+                    log.warning(f"⚠️ Ошибка проверки загрузки: {e}")
+                    continue
             
             # Логируем текущий URL
             current_url = self.driver.current_url
             log.info(f"📍 Текущий URL: {current_url}")
             
+            # Определяем платформу и используем специфичные селекторы
+            platform = self._detect_platform(current_url)
+            log.info(f"🔍 Определена платформа: {platform}")
+            
+            # Для Zoom пытаемся найти прямую ссылку или перейти в веб-версию
+            if "zoom" in platform.lower():
+                log.info("🎯 Обрабатываем Zoom встречу...")
+                if not self._handle_zoom_meeting():
+                    log.warning("⚠️ Не удалось обработать Zoom встречу специальным способом")
+                    # Продолжаем с обычной обработкой
+                else:
+                    log.info("✅ Zoom встреча обработана специальным способом!")
+                    return True
+            
             # Сохраняем HTML для анализа
             try:
-                with open('/tmp/meeting_page.html', 'w', encoding='utf-8') as f:
+                import tempfile
+                temp_dir = tempfile.gettempdir()
+                html_path = os.path.join(temp_dir, 'meeting_page.html')
+                with open(html_path, 'w', encoding='utf-8') as f:
                     f.write(self.driver.page_source)
-                log.info("💾 HTML страницы сохранен в /tmp/meeting_page.html")
-            except:
-                pass
+                log.info(f"💾 HTML страницы сохранен в {html_path}")
+            except Exception as e:
+                log.warning(f"⚠️ Не удалось сохранить HTML: {e}")
             
             # Шаг 1: Агрессивно кликаем по всем элементам
             self.aggressive_click_all_possible_elements()
@@ -324,8 +355,8 @@ class AggressiveMeetingAutomation:
                         self.recording_process = subprocess.Popen(
                             cmd, 
                             stdout=subprocess.PIPE, 
-                            stderr=subprocess.PIPE,
-                            preexec_fn=os.setsid
+                            stderr=subprocess.PIPE
+                            # preexec_fn=os.setsid  # Убрано для Windows
                         )
                         
                         # Проверяем, что процесс запустился
@@ -453,6 +484,67 @@ class AggressiveMeetingAutomation:
             
         except Exception as e:
             log.error(f"❌ Ошибка при покидании встречи: {e}")
+            return False
+    
+    def _detect_platform(self, url):
+        """Определение платформы встречи"""
+        url_lower = url.lower()
+        if 'zoom.us' in url_lower:
+            return 'zoom'
+        elif 'meet.google.com' in url_lower:
+            return 'google_meet'
+        elif 'teams.microsoft.com' in url_lower:
+            return 'microsoft_teams'
+        elif 'telemost.yandex.ru' in url_lower:
+            return 'yandex_telemost'
+        elif 'talk.kontur.ru' in url_lower or 'ktalk.ru' in url_lower:
+            return 'kontur_talk'
+        else:
+            return 'unknown'
+    
+    def _handle_zoom_meeting(self):
+        """Специальная обработка Zoom встреч"""
+        try:
+            log.info("🔍 Попытка найти веб-версию Zoom...")
+            
+            # Попытка сформировать URL веб-клиента напрямую
+            current_url = self.driver.current_url
+            if '/j/' in current_url:
+                meeting_id = current_url.split('/j/')[1].split('?')[0]
+                web_url = f"https://us05web.zoom.us/wc/join/{meeting_id}"
+                if '?' in current_url and 'pwd=' in current_url:
+                    password = current_url.split('pwd=')[1].split('&')[0]
+                    web_url += f"?pwd={password}"
+                
+                log.info(f"🔗 Попытка перейти в веб-клиент: {web_url}")
+                self.driver.get(web_url)
+                
+                # Активно ждем загрузки веб-клиента
+                log.info("⏳ Ждем загрузки веб-клиента Zoom...")
+                for i in range(9):  # 9 попыток по 5 секунд = 45 секунд
+                    time.sleep(5)
+                    try:
+                        new_url = self.driver.current_url
+                        page_title = self.driver.title
+                        log.info(f"🔄 Веб-клиент {i+1}/9: URL={new_url[:50]}..., Title={page_title[:30]}...")
+                        
+                        if 'wc/join' in new_url:
+                            log.info("✅ Веб-клиент Zoom загружен!")
+                            break
+                    except Exception as e:
+                        log.warning(f"⚠️ Ошибка проверки веб-клиента: {e}")
+                        continue
+                
+                new_url = self.driver.current_url
+                if 'wc/join' in new_url:
+                    log.info("✅ Успешно перешли в веб-клиент Zoom")
+                    return True
+            
+            log.warning("⚠️ Не удалось найти веб-версию Zoom")
+            return False
+            
+        except Exception as e:
+            log.error(f"❌ Ошибка при обработке Zoom встречи: {e}")
             return False
 
 # Глобальный экземпляр агрессивной автоматизации

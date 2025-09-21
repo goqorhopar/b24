@@ -229,6 +229,19 @@ def polling_worker():
     """Фоновый процесс для polling."""
     offset = 0
     log.info("Запущен polling для получения сообщений...")
+    
+    # Получаем последний update_id для правильного offset
+    try:
+        response = requests.get(f"{BASE_URL}/getUpdates", params={"offset": -1, "limit": 1})
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("ok") and data.get("result"):
+                last_update = data["result"][-1]
+                offset = last_update["update_id"] + 1
+                log.info(f"Начинаем с offset: {offset}")
+    except Exception as e:
+        log.warning(f"Не удалось получить последний offset: {e}")
+        offset = 0
     while True:
         try:
             response = requests.get(
@@ -259,8 +272,8 @@ def index():
     return {"ok": True, "message": "Telegram bot is running"}, 200
 
 
-# --- Точка входа ---
-if __name__ == "__main__":
+def main():
+    """Основная функция запуска бота"""
     init_db()
     log.info("База данных успешно инициализирована")
 
@@ -278,3 +291,7 @@ if __name__ == "__main__":
 
     # Запускаем веб-сервер для healthcheck и/или режима вебхуков
     app.run(host="0.0.0.0", port=PORT, use_reloader=False)
+
+# --- Точка входа ---
+if __name__ == "__main__":
+    main()

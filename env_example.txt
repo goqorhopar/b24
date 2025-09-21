@@ -1,0 +1,245 @@
+# Пример файла конфигурации для Meeting Bot Server
+# Скопируйте этот файл в .env и заполните ваши данные
+
+# ===========================================
+# ОБЯЗАТЕЛЬНЫЕ ПЕРЕМЕННЫЕ
+# ===========================================
+
+# Telegram Bot Token (получить у @BotFather)
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+
+# Gemini AI API Key (получить в Google AI Studio)
+GEMINI_API_KEY=your_gemini_api_key_here
+
+# ===========================================
+# BITRIX24 ИНТЕГРАЦИЯ (ОПЦИОНАЛЬНО)
+# ===========================================
+
+# Webhook URL из Bitrix24
+BITRIX_WEBHOOK_URL=https://your-domain.bitrix24.ru/rest/1/your-webhook-code/
+
+# ID ответственного пользователя в Bitrix24
+BITRIX_RESPONSIBLE_ID=1
+
+# ID создателя (обычно тот же, что и ответственный)
+BITRIX_CREATED_BY_ID=1
+
+# Количество дней до дедлайна задач
+BITRIX_TASK_DEADLINE_DAYS=3
+
+# ===========================================
+# НАСТРОЙКИ СЕРВЕРА
+# ===========================================
+
+# Окружение (development/production)
+NODE_ENV=production
+
+# Уровень логирования (DEBUG/INFO/WARNING/ERROR)
+LOG_LEVEL=INFO
+
+# Порт для веб-сервера
+PORT=3000
+
+# ===========================================
+# НАСТРОЙКИ ВСТРЕЧ
+# ===========================================
+
+# Имя для отображения в встречах
+MEETING_DISPLAY_NAME=Асистент Григория
+
+# Режим без GUI (true для сервера)
+MEETING_HEADLESS=true
+
+# Автоматический выход после встречи
+MEETING_AUTO_LEAVE=true
+
+# Максимальная длительность встречи в минутах
+MEETING_DURATION_MINUTES=60
+
+# ===========================================
+# НАСТРОЙКИ АУДИО
+# ===========================================
+
+# Метод записи аудио (auto/system/screen/browser)
+AUDIO_RECORDING_METHOD=auto
+
+# Частота дискретизации
+AUDIO_SAMPLE_RATE=16000
+
+# Количество каналов
+AUDIO_CHANNELS=1
+
+# Размер чанка
+AUDIO_CHUNK_SIZE=1024
+
+# ===========================================
+# НАСТРОЙКИ РАСПОЗНАВАНИЯ РЕЧИ
+# ===========================================
+
+# Модель Whisper (tiny/base/small/medium/large)
+WHISPER_MODEL=base
+
+# Язык распознавания
+WHISPER_LANGUAGE=ru
+
+# Устройство для вычислений (auto/cpu/cuda)
+WHISPER_DEVICE=auto
+
+# ===========================================
+# НАСТРОЙКИ GEMINI AI
+# ===========================================
+
+# Основная модель
+GEMINI_MODEL=gemini-1.5-pro
+
+# Резервная модель
+GEMINI_MODEL_FALLBACK=gemini-1.5-flash
+
+# Температура (креативность)
+GEMINI_TEMPERATURE=0.1
+
+# Top-p
+GEMINI_TOP_P=0.2
+
+# Максимальное количество токенов
+GEMINI_MAX_TOKENS=1200
+
+# Максимальная длина входного текста
+GEMINI_INPUT_MAX_CHARS=15000
+
+# ===========================================
+# НАСТРОЙКИ CHROME/WEBDRIVER
+# ===========================================
+
+# Режим без GUI
+CHROME_HEADLESS=true
+
+# Размер окна
+CHROME_WINDOW_SIZE=1920,1080
+
+# User Agent
+CHROME_USER_AGENT=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+
+# ===========================================
+# ПРОИЗВОДИТЕЛЬНОСТЬ
+# ===========================================
+
+# Максимальное количество одновременных встреч
+MAX_CONCURRENT_MEETINGS=3
+
+# Таймаут встречи в секундах
+MEETING_TIMEOUT_SECONDS=3600
+
+# Интервал очистки в минутах
+CLEANUP_INTERVAL_MINUTES=30
+
+# ===========================================
+# УПРАВЛЕНИЕ ФАЙЛАМИ
+# ===========================================
+
+# Директория для временных файлов
+TEMP_DIR=/tmp/meeting_bot
+
+# Максимальное количество временных файлов
+MAX_TEMP_FILES=10
+
+# Время хранения временных файлов в часах
+TEMP_FILE_RETENTION_HOURS=24
+
+# ===========================================
+# БЕЗОПАСНОСТЬ
+# ===========================================
+
+# Разрешенные чаты (через запятую, пустое = все разрешены)
+ALLOWED_CHAT_IDS=
+
+# Заблокированные чаты (через запятую)
+BLOCKED_CHAT_IDS=
+
+# ===========================================
+# МОНИТОРИНГ
+# ===========================================
+
+# Включить метрики
+ENABLE_METRICS=true
+
+# Порт для метрик
+METRICS_PORT=9090
+
+# ===========================================
+# АДМИНИСТРАТОР
+# ===========================================
+
+# Chat ID администратора для уведомлений
+ADMIN_CHAT_ID=your_admin_chat_id_here
+
+# ===========================================
+# ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ
+# ===========================================
+
+# Максимальное количество попыток
+MAX_RETRIES=3
+
+# Задержка между попытками
+RETRY_DELAY=2.0
+
+# Джиттер для задержки
+RETRY_JITTER=0.5
+
+# Таймаут запросов
+REQUEST_TIMEOUT=30
+
+# Максимальная длина комментария
+MAX_COMMENT_LENGTH=8000
+
+# ===========================================
+# НАСТРОЙКИ АВТОМАТИЧЕСКОГО ДЕПЛОЯ
+# ===========================================
+
+# GitHub репозиторий (формат: owner/repo)
+GITHUB_REPO=your_username/meeting-bot
+
+# Ветка для деплоя
+GITHUB_BRANCH=main
+
+# Токен GitHub для автоматических коммитов
+GITHUB_TOKEN=your_github_token_here
+
+# URL сервера для деплоя
+DEPLOY_SERVER_URL=your_server_ip_or_domain
+
+# Пользователь на сервере
+DEPLOY_SERVER_USER=root
+
+# Порт SSH
+DEPLOY_SSH_PORT=22
+
+# Путь на сервере для деплоя
+DEPLOY_SERVER_PATH=/opt/meeting-bot
+
+# Команда для перезапуска сервиса на сервере
+DEPLOY_RESTART_COMMAND=systemctl restart meeting-bot
+
+# Включить уведомления о деплое
+ENABLE_DEPLOY_NOTIFICATIONS=true
+
+# Включить уведомления об ошибках
+ENABLE_ERROR_NOTIFICATIONS=true
+
+# Включить уведомления о встречах
+ENABLE_MEETING_NOTIFICATIONS=true
+
+# ===========================================
+# ПРИМЕРЫ ЗНАЧЕНИЙ
+# ===========================================
+
+ TELEGRAM_BOT_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
+ GEMINI_API_KEY=AIzaSyABCdefGHIjklMNOpqrsTUVwxyz123456
+ BITRIX_WEBHOOK_URL=https://your-company.bitrix24.ru/rest/1/abc123def456/
+ ADMIN_CHAT_ID=123456789
+ ALLOWED_CHAT_IDS=123456789,987654321
+ BLOCKED_CHAT_IDS=111111111,222222222
+ GITHUB_REPO=yourusername/meeting-bot
+ GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
+ DEPLOY_SERVER_URL=192.168.1.100
+ DEPLOY_SERVER_USER=root

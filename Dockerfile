@@ -1,62 +1,57 @@
-# Используем официальный Python образ
+# Dockerfile для Telegram Meeting Bot
 FROM python:3.11-slim
-
-# Устанавливаем метаданные
-LABEL maintainer="Telegram Gemini Bot"
-LABEL version="2.0"
-LABEL description="Telegram bot for sales meeting analysis with Gemini AI and Bitrix24 integration"
-
-# Устанавливаем переменные окружения
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PIP_NO_CACHE_DIR=1
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-
-# Создаем рабочую директорию
-WORKDIR /app
 
 # Устанавливаем системные зависимости
 RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
+    wget \
+    gnupg \
+    unzip \
     curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    xvfb \
+    pulseaudio \
+    pulseaudio-utils \
+    alsa-utils \
+    && rm -rf /var/lib/apt/lists/*
 
-# Создаем пользователя для безопасности
-RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+# Устанавливаем Google Chrome
+RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update \
+    && apt-get install -y google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
 
-# Копируем файл зависимостей
+# Создаем пользователя для запуска приложения
+RUN useradd -m -s /bin/bash botuser
+
+# Устанавливаем рабочую директорию
+WORKDIR /app
+
+# Копируем requirements.txt и устанавливаем Python зависимости
 COPY requirements.txt .
-
-# Обновляем pip и устанавливаем зависимости
-RUN pip install --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем исходный код приложения
-COPY . .
+# Копируем исходный код
+COPY src/ ./src/
+COPY *.py ./
 
-# Создаем директорию для базы данных и логов
-RUN mkdir -p /app/data /app/logs
-
-# Устанавливаем права доступа
-RUN chown -R appuser:appgroup /app
-RUN chmod +x /app/*.py
+# Создаем директории для данных
+RUN mkdir -p /app/data/recordings /app/data/logs /app/data/backups \
+    && chown -R botuser:botuser /app
 
 # Переключаемся на непривилегированного пользователя
-USER appuser
+USER botuser
 
-# Устанавливаем переменные окружения по умолчанию
-ENV PORT=3000
-ENV LOG_LEVEL=info
-ENV DB_PATH=/app/data/bot_state.db
+# Настраиваем переменные окружения
+ENV PYTHONPATH=/app
+ENV DISPLAY=:99
+ENV PULSE_RUNTIME_PATH=/tmp/pulse
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:5000/health || exit 1
 
 # Открываем порт
-EXPOSE 3000
-
-# Проверка здоровья контейнера
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:3000/health || exit 1
+EXPOSE 5000
 
 # Команда запуска
-CMD ["gunicorn", "main:app", "--bind", "0.0.0.0:3000", "--workers", "2", "--timeout", "120", "--worker-class", "sync", "--max-requests", "1000", "--max-requests-jitter", "100", "--preload", "--access-logfile", "-", "--error-logfile", "-"]
+CMD ["python", "main.py"]
