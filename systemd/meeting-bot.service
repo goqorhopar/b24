@@ -1,20 +1,19 @@
 [Unit]
 Description=Meeting Bot Assistant
-Documentation=https://github.com/your-repo/meeting-bot
-After=network.target docker.service
-Requires=docker.service
+Documentation=https://github.com/goqorhopar/b24
+After=network.target
+Wants=network.target
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-WorkingDirectory=/opt/meeting-bot
-ExecStart=/usr/local/bin/docker-compose up -d
-ExecStop=/usr/local/bin/docker-compose down
-ExecReload=/usr/local/bin/docker-compose restart
-TimeoutStartSec=0
-User=meetingbot
-Group=meetingbot
-Restart=on-failure
+Type=simple
+WorkingDirectory=/root/b24
+ExecStart=/root/b24/venv/bin/python /root/b24/main.py
+ExecReload=/bin/kill -HUP $MAINPID
+TimeoutStartSec=30
+TimeoutStopSec=30
+User=root
+Group=root
+Restart=always
 RestartSec=10
 
 # Логирование
@@ -22,12 +21,15 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=meeting-bot
 
+# Переменные окружения
+Environment=PYTHONPATH=/root/b24
+Environment=LOG_LEVEL=INFO
+Environment=USE_POLLING=true
+Environment=PORT=3000
+
 # Безопасность
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/opt/meeting-bot
 
 [Install]
 WantedBy=multi-user.target
