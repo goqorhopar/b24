@@ -1,0 +1,33 @@
+[Unit]
+Description=Meeting Bot Assistant
+Documentation=https://github.com/your-repo/meeting-bot
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/meeting-bot
+ExecStart=/usr/local/bin/docker-compose up -d
+ExecStop=/usr/local/bin/docker-compose down
+ExecReload=/usr/local/bin/docker-compose restart
+TimeoutStartSec=0
+User=meetingbot
+Group=meetingbot
+Restart=on-failure
+RestartSec=10
+
+# Логирование
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=meeting-bot
+
+# Безопасность
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/meeting-bot
+
+[Install]
+WantedBy=multi-user.target

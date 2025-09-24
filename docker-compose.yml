@@ -2,213 +2,50 @@ version: '3.8'
 
 services:
   meeting-bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
     container_name: meeting-bot-assistant
     restart: unless-stopped
-    
-    # Переменные окружения
     environment:
       - NODE_ENV=production
-      - DOCKER_MODE=true
-      - PORT=3000
-      - HOST=0.0.0.0
-      
-      # Telegram Bot
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TELEGRAM_WEBHOOK_URL=${TELEGRAM_WEBHOOK_URL}
-      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET}
-      
-      # Bitrix24
       - BITRIX_WEBHOOK_URL=${BITRIX_WEBHOOK_URL}
-      - BITRIX_RESPONSIBLE_ID=${BITRIX_RESPONSIBLE_ID:-1}
-      - BITRIX_CREATED_BY_ID=${BITRIX_CREATED_BY_ID:-1}
-      - BITRIX_TASK_DEADLINE_DAYS=${BITRIX_TASK_DEADLINE_DAYS:-3}
-      
-      # Gemini AI
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-      
-      # OpenAI (Whisper)
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      
-      # Альтернативные STT
-      - GOOGLE_STT_API_KEY=${GOOGLE_STT_API_KEY}
-      - AZURE_SPEECH_KEY=${AZURE_SPEECH_KEY}
-      - AZURE_SPEECH_REGION=${AZURE_SPEECH_REGION}
-      
-      # Puppeteer
-      - PUPPETEER_HEADLESS=true
-      - PUPPETEER_SLOW_MO=0
-      - PUPPETEER_TIMEOUT=30000
-      
-      # Аудио
-      - AUDIO_RECORDING_DURATION=${AUDIO_RECORDING_DURATION:-3600000}
-      - AUDIO_FORMAT=${AUDIO_FORMAT:-wav}
-      - AUDIO_SAMPLE_RATE=${AUDIO_SAMPLE_RATE:-16000}
-      - AUDIO_CHANNELS=${AUDIO_CHANNELS:-1}
-      
-      # PulseAudio
-      - PULSEAUDIO_SINK=${PULSEAUDIO_SINK:-meeting_bot_sink}
-      - PULSEAUDIO_SOURCE=${PULSEAUDIO_SOURCE:-meeting_bot_source}
-      
-      # Пути
-      - DATA_DIR=/data
-      - LOGS_DIR=/var/log/meetingbot
-      - AUDIO_DIR=/data/audio
-      - TEMP_DIR=/tmp
-      
-      # Логирование
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - LOG_MAX_SIZE=${LOG_MAX_SIZE:-10m}
-      - LOG_MAX_FILES=${LOG_MAX_FILES:-5}
-      
-      # База данных
-      - DATABASE_URL=sqlite:/data/meetingbot.db
-      - DATABASE_POOL_SIZE=${DATABASE_POOL_SIZE:-10}
-      
-      # Безопасность
-      - JWT_SECRET=${JWT_SECRET:-your-secret-key}
-      - API_RATE_LIMIT=${API_RATE_LIMIT:-100}
-      - API_RATE_WINDOW=${API_RATE_WINDOW:-900000}
-      
-      # Встречи
-      - MEETING_TIMEOUT=${MEETING_TIMEOUT:-3600000}
-      - MEETING_RETRY_ATTEMPTS=${MEETING_RETRY_ATTEMPTS:-3}
-      - MEETING_RETRY_DELAY=${MEETING_RETRY_DELAY:-5000}
-      
-      # Уведомления
-      - NOTIFICATION_TELEGRAM_CHAT_ID=${NOTIFICATION_TELEGRAM_CHAT_ID}
-      - NOTIFICATION_ENABLED=${NOTIFICATION_ENABLED:-true}
-      
-      # Мониторинг
-      - HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-300000}
-      - METRICS_ENABLED=${METRICS_ENABLED:-true}
-    
-    # Порты
+      - ADMIN_CHAT_ID=${ADMIN_CHAT_ID}
+    volumes:
+      - ./telegram_bot.js:/app/telegram_bot.js:ro
+      - ./router.py:/app/router.py:ro
+      - ./logs:/app/logs
+      - ./data:/app/data
     ports:
       - "3000:3000"
-    
-    # Тома
-    volumes:
-      - meeting-bot-data:/data
-      - meeting-bot-logs:/var/log/meetingbot
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - /dev/snd:/dev/snd:rw
-    
-    # Ограничения ресурсов
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '1.0'
-        reservations:
-          memory: 512M
-          cpus: '0.5'
-    
-    # Сеть
-    networks:
-      - meeting-bot-network
-    
-    # Зависимости
+    working_dir: /app
+    command: >
+      sh -c "
+        npm install &&
+        node telegram_bot.js
+      "
     depends_on:
-      - redis
-    
-    # Логирование
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "5"
+      - nginx
 
-  # Redis для кэширования (опционально)
-  redis:
-    image: redis:7-alpine
-    container_name: meeting-bot-redis
-    restart: unless-stopped
-    
-    # Конфигурация Redis
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
-    
-    # Тома
-    volumes:
-      - redis-data:/data
-    
-    # Сеть
-    networks:
-      - meeting-bot-network
-    
-    # Ограничения ресурсов
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: '0.2'
-        reservations:
-          memory: 64M
-          cpus: '0.1'
-    
-    # Логирование
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "5m"
-        max-file: "3"
-
-  # Nginx для проксирования (опционально)
   nginx:
     image: nginx:alpine
     container_name: meeting-bot-nginx
     restart: unless-stopped
-    
-    # Конфигурация Nginx
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro
-    
-    # Порты
     ports:
       - "80:80"
       - "443:443"
-    
-    # Сеть
-    networks:
-      - meeting-bot-network
-    
-    # Зависимости
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
     depends_on:
       - meeting-bot
-    
-    # Ограничения ресурсов
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-          cpus: '0.2'
-        reservations:
-          memory: 32M
-          cpus: '0.1'
-    
-    # Логирование
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "5m"
-        max-file: "3"
 
-# Тома
-volumes:
-  meeting-bot-data:
-    driver: local
-  meeting-bot-logs:
-    driver: local
-  redis-data:
-    driver: local
-
-# Сеть
-networks:
-  meeting-bot-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
+  watchtower:
+    image: containrrr/watchtower
+    container_name: meeting-bot-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=300

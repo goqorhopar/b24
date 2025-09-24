@@ -1,327 +1,91 @@
-name: Deploy to VPS
+name: Deploy to Beget Server
 
 on:
   push:
     branches: [ main ]
-  release:
-    types: [ published ]
   workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Environment to deploy to'
-        required: true
-        default: 'production'
-        type: choice
-        options:
-          - production
-          - staging
-
-concurrency:
-  group: deploy-${{ github.repository }}
-  cancel-in-progress: true
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   deploy:
-    name: Deploy to VPS
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment || 'production' }}
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-        
-    - name: Deploy to VPS
+    - name: Deploy to server
       uses: appleboy/ssh-action@v1.0.3
       with:
-        host: ${{ secrets.VPS_SSH_HOST }}
-        username: ${{ secrets.VPS_SSH_USER }}
-        port: ${{ secrets.VPS_SSH_PORT || 22 }}
-        key: ${{ secrets.VPS_SSH_KEY }}
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        password: ${{ secrets.SERVER_PASSWORD }}
         script: |
-          set -e
-            
-            # Переменные
-            IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-            LATEST_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
-            CONTAINER_NAME="meeting-bot-assistant"
-            COMPOSE_FILE="/opt/meetingbot/docker-compose.yml"
-            BACKUP_DIR="/opt/meetingbot/backups"
-            LOCK_FILE="/opt/meetingbot/.deploy.lock"
-            
-            echo "🚀 Starting deployment of $IMAGE"
-            
-            # Проверка блокировки деплоя
-            if [ -f "$LOCK_FILE" ]; then
-              echo "❌ Deployment is already in progress. Lock file exists: $LOCK_FILE"
-              exit 1
-            fi
-            
-            # Создание блокировки
-            echo "🔒 Creating deployment lock"
-            echo "$$" > "$LOCK_FILE"
-            
-            # Функция очистки блокировки
-            cleanup() {
-              echo "🔓 Removing deployment lock"
-              rm -f "$LOCK_FILE"
-            }
-            trap cleanup EXIT
-            
-            # Создание директорий
-            echo "📁 Creating directories"
-            mkdir -p "$BACKUP_DIR"
-            mkdir -p "/opt/meetingbot"
-            mkdir -p "/data/meetingbot"
-            mkdir -p "/var/log/meetingbot"
-            
-            # Остановка текущего контейнера
-            echo "🛑 Stopping current container"
-            if docker ps -q -f name="$CONTAINER_NAME" | grep -q .; then
-              docker stop "$CONTAINER_NAME" || true
-              docker rm "$CONTAINER_NAME" || true
-            fi
-            
-            # Создание бэкапа
-            echo "💾 Creating backup"
-            BACKUP_FILE="$BACKUP_DIR/backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-            if [ -d "/data/meetingbot" ]; then
-              tar -czf "$BACKUP_FILE" /data/meetingbot /var/log/meetingbot || true
-              echo "Backup created: $BACKUP_FILE"
-            fi
-            
-            # Очистка старых бэкапов (старше 7 дней)
-            find "$BACKUP_DIR" -name "backup-*.tar.gz" -mtime +7 -delete || true
-            
-            # Обновление docker-compose.yml
-            echo "📝 Updating docker-compose.yml"
-            cat > "$COMPOSE_FILE" << 'EOF'
-            version: '3.8'
-            
-            services:
-              meeting-bot:
-                image: $IMAGE
-                container_name: meeting-bot-assistant
-                restart: unless-stopped
-                environment:
-                  - NODE_ENV=production
-                  - DOCKER_MODE=true
-                  - PORT=3000
-                  - HOST=0.0.0.0
-                env_file:
-                  - /opt/meetingbot/.env
-                ports:
-                  - "3000:3000"
-                volumes:
-                  - /data/meetingbot:/data
-                  - /var/log/meetingbot:/var/log/meetingbot
-                  - /tmp/.X11-unix:/tmp/.X11-unix:rw
-                  - /dev/snd:/dev/snd:rw
-                deploy:
-                  resources:
-                    limits:
-                      memory: 2G
-                      cpus: '1.0'
-                    reservations:
-                      memory: 512M
-                      cpus: '0.5'
-                logging:
-                  driver: "json-file"
-                  options:
-                    max-size: "10m"
-                    max-file: "5"
-                healthcheck:
-                  test: ["CMD", "node", "scripts/healthcheck.js"]
-                  interval: 30s
-                  timeout: 10s
-                  retries: 3
-                  start_period: 60s
-            EOF
-            
-            # Замена переменной IMAGE в docker-compose.yml
-            sed -i "s/\$IMAGE/$IMAGE/g" "$COMPOSE_FILE"
-            
-            # Проверка .env файла
-            if [ ! -f "/opt/meetingbot/.env" ]; then
-              echo "❌ Environment file not found: /opt/meetingbot/.env"
-              echo "Please create the .env file with required environment variables"
-              exit 1
-            fi
-            
-            # Проверка прав доступа к .env файлу
-            chmod 600 "/opt/meetingbot/.env"
-            
-            # Запуск нового контейнера
-            echo "🚀 Starting new container"
-            cd /opt/meetingbot
-            docker-compose up -d
-            
-            # Ожидание запуска
-            echo "⏳ Waiting for container to start"
-            sleep 30
-            
-            # Проверка здоровья
-            echo "🏥 Checking container health"
-            for i in {1..10}; do
-              if docker exec "$CONTAINER_NAME" node scripts/healthcheck.js; then
-                echo "✅ Container is healthy"
-                break
-              else
-                echo "⏳ Waiting for container to be healthy (attempt $i/10)"
-                sleep 10
-              fi
-              
-              if [ $i -eq 10 ]; then
-                echo "❌ Container failed health check"
-                echo "📋 Container logs:"
-                docker logs "$CONTAINER_NAME" --tail 50
-                exit 1
-              fi
-            done
-            
-            # Проверка HTTP endpoints
-            echo "🌐 Checking HTTP endpoints"
-            for i in {1..5}; do
-              if curl -f http://localhost:3000/health; then
-                echo "✅ Health endpoint is responding"
-                break
-              else
-                echo "⏳ Waiting for health endpoint (attempt $i/5)"
-                sleep 10
-              fi
-              
-              if [ $i -eq 5 ]; then
-                echo "❌ Health endpoint is not responding"
-                echo "📋 Container logs:"
-                docker logs "$CONTAINER_NAME" --tail 50
-              exit 1
-          fi
-            done
-            
-            # Обновление latest тега
-            echo "🏷️ Updating latest tag"
-            docker tag "$IMAGE" "$LATEST_IMAGE"
-            
-            # Очистка старых образов
-            echo "🧹 Cleaning up old images"
-            docker image prune -f || true
-            
-            echo "✅ Deployment completed successfully!"
-            echo "📊 Container status:"
-            docker ps -f name="$CONTAINER_NAME"
-            echo "📋 Container logs (last 20 lines):"
-            docker logs "$CONTAINER_NAME" --tail 20
+          # Остановка сервиса
+          systemctl stop meeting-bot.service || true
           
-    - name: Verify deployment
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.VPS_SSH_HOST }}
-        username: ${{ secrets.VPS_SSH_USER }}
-        port: ${{ secrets.VPS_SSH_PORT || 22 }}
-        key: ${{ secrets.VPS_SSH_KEY }}
-        script: |
-            set -e
-            
-            CONTAINER_NAME="meeting-bot-assistant"
-            
-            echo "🔍 Verifying deployment"
-            
-            # Проверка статуса контейнера
-            if ! docker ps -q -f name="$CONTAINER_NAME" | grep -q .; then
-              echo "❌ Container is not running"
-              exit 1
-            fi
-            
-            # Проверка health endpoint
-            if ! curl -f http://localhost:3000/health; then
-              echo "❌ Health endpoint is not responding"
-              exit 1
-            fi
-            
-            # Проверка API endpoint
-            if ! curl -f http://localhost:3000/api/status; then
-              echo "❌ API endpoint is not responding"
-              exit 1
-            fi
-            
-            echo "✅ Deployment verification successful!"
-
-    - name: Notify success
-      if: success()
-      run: |
-        echo "✅ Deployment to VPS completed successfully!"
-        echo "🌐 Application is available at: http://${{ secrets.VPS_SSH_HOST }}:3000"
-        echo "📊 Health check: http://${{ secrets.VPS_SSH_HOST }}:3000/health"
-
-    - name: Notify failure
-      if: failure()
-      run: |
-        echo "❌ Deployment to VPS failed!"
-        echo "Please check the logs and fix the issues."
-
-  rollback:
-    name: Rollback Deployment
-    runs-on: ubuntu-latest
-    if: failure()
-    needs: deploy
-    
-    steps:
-      - name: Rollback to previous version
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.VPS_SSH_HOST }}
-          username: ${{ secrets.VPS_SSH_USER }}
-          port: ${{ secrets.VPS_SSH_PORT || 22 }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          script: |
-            set -e
-            
-            CONTAINER_NAME="meeting-bot-assistant"
-            COMPOSE_FILE="/opt/meetingbot/docker-compose.yml"
-            BACKUP_DIR="/opt/meetingbot/backups"
-            
-            echo "🔄 Starting rollback process"
-            
-            # Остановка текущего контейнера
-            echo "🛑 Stopping current container"
-            if docker ps -q -f name="$CONTAINER_NAME" | grep -q .; then
-              docker stop "$CONTAINER_NAME" || true
-              docker rm "$CONTAINER_NAME" || true
-            fi
-            
-            # Восстановление из бэкапа
-            echo "💾 Restoring from backup"
-            LATEST_BACKUP=$(ls -t "$BACKUP_DIR"/backup-*.tar.gz 2>/dev/null | head -1)
-            if [ -n "$LATEST_BACKUP" ]; then
-              echo "Restoring from: $LATEST_BACKUP"
-              tar -xzf "$LATEST_BACKUP" -C / || true
-            fi
-            
-            # Запуск предыдущей версии
-            echo "🚀 Starting previous version"
-            cd /opt/meetingbot
-            if [ -f "$COMPOSE_FILE" ]; then
-              # Замена на latest тег
-              sed -i "s/${{ env.REGISTRY }}\/${{ env.IMAGE_NAME }}:${{ github.sha }}/${{ env.REGISTRY }}\/${{ env.IMAGE_NAME }}:latest/g" "$COMPOSE_FILE"
-              docker-compose up -d
-            fi
-            
-            echo "✅ Rollback completed"
-
-      - name: Notify rollback
-        run: |
-          echo "🔄 Rollback completed due to deployment failure"
-          echo "Please investigate and fix the issues before next deployment."
+          # Очистка места
+          rm -rf /tmp/*
+          rm -rf /var/tmp/*
+          rm -rf /var/cache/apt/archives/*
+          rm -rf /var/lib/apt/lists/*
+          
+          # Клонирование/обновление репозитория
+          if [ -d "/root/b24" ]; then
+            cd /root/b24
+            git pull origin main
+          else
+            git clone https://github.com/${{ github.repository }} /root/b24
+            cd /root/b24
+          fi
+          
+          # Создание .env файла
+          cat > .env << 'EOF'
+          NODE_ENV=production
+          PORT=3000
+          HOST=0.0.0.0
+          TELEGRAM_BOT_TOKEN=7992998044:AAHUNEIBP9nqIC7fmpHqBKAPcoQM5ltrWuI
+          BITRIX_WEBHOOK_URL=https://skill-to-lead.bitrix24.ru/rest/1403/cmf3ncejqif8ny31/
+          GEMINI_API_KEY=AIzaSyDQR42zm4pcRMkY9KzKvEmXm7hyR8UzxHI
+          ADMIN_CHAT_ID=7537953397
+          RENDER_EXTERNAL_URL=https://109.172.47.253
+          PUPPETEER_HEADLESS=true
+          TZ=Europe/Moscow
+          EOF
+          
+          # Установка зависимостей
+          if [ ! -d "venv" ]; then
+            python3 -m venv venv
+          fi
+          source venv/bin/activate
+          pip install -r requirements.txt
+          
+          # Обновление systemd сервиса
+          cat > /etc/systemd/system/meeting-bot.service << 'EOF'
+          [Unit]
+          Description=Meeting Bot Assistant
+          After=network.target
+          
+          [Service]
+          Type=simple
+          User=root
+          WorkingDirectory=/root/b24
+          ExecStart=/root/b24/venv/bin/python /root/b24/main.py
+          Restart=always
+          RestartSec=10
+          Environment=NODE_ENV=production
+          Environment=TELEGRAM_BOT_TOKEN=7992998044:AAHUNEIBP9nqIC7fmpHqBKAPcoQM5ltrWuI
+          Environment=BITRIX_WEBHOOK_URL=https://skill-to-lead.bitrix24.ru/rest/1403/cmf3ncejqif8ny31/
+          Environment=GEMINI_API_KEY=AIzaSyDQR42zm4pcRMkY9KzKvEmXm7hyR8UzxHI
+          Environment=ADMIN_CHAT_ID=7537953397
+          Environment=RENDER_EXTERNAL_URL=https://109.172.47.253
+          Environment=PUPPETEER_HEADLESS=true
+          Environment=TZ=Europe/Moscow
+          
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          
+          # Перезапуск сервиса
+          systemctl daemon-reload
+          systemctl enable meeting-bot.service
+          systemctl start meeting-bot.service
+          
+          # Проверка статуса
+          systemctl status meeting-bot.service --no-pager

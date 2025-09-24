@@ -1,74 +1,45 @@
-# Multi-stage build для оптимизации размера образа
-FROM node:18-alpine AS base
+FROM node:18-alpine
 
-# Установка системных зависимостей
+# Install Python and system dependencies
 RUN apk add --no-cache \
-    chromium \
-    nss \
-    freetype \
-    freetype-dev \
-    harfbuzz \
-    ca-certificates \
-    ttf-freefont \
-    ffmpeg \
-    pulseaudio \
-    pulseaudio-dev \
-    alsa-lib \
-    alsa-lib-dev \
     python3 \
-    make \
-    g++ \
-    && rm -rf /var/cache/apk/*
+    py3-pip \
+    chromium \
+    ffmpeg \
+    curl \
+    wget \
+    git
 
-# Настройка Puppeteer для работы с Chromium
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser \
-    CHROME_BIN=/usr/bin/chromium-browser \
-    CHROME_PATH=/usr/bin/chromium-browser
-
-# Создание пользователя для безопасности
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S meetingbot -u 1001 -G nodejs
-
-# Установка рабочей директории
+# Set working directory
 WORKDIR /app
 
-# Копирование package.json и package-lock.json
+# Copy package files
 COPY package*.json ./
 
-# Установка зависимостей
-RUN npm ci --only=production && npm cache clean --force
+# Install Node.js dependencies
+RUN npm install
 
-# Копирование исходного кода
-COPY --chown=meetingbot:nodejs . .
+# Install Python dependencies
+RUN pip3 install --no-cache-dir \
+    google-generativeai \
+    requests \
+    python-dotenv
 
-# Создание необходимых директорий
-RUN mkdir -p /data/audio/raw /data/audio/processed /var/log/meetingbot /tmp && \
-    chown -R meetingbot:nodejs /data /var/log/meetingbot /tmp
+# Copy application files
+COPY . .
 
-# Настройка PulseAudio для пользователя
-RUN mkdir -p /home/meetingbot/.config/pulse && \
-    chown -R meetingbot:nodejs /home/meetingbot
+# Create necessary directories
+RUN mkdir -p logs data recordings
 
-# Переключение на пользователя meetingbot
-USER meetingbot
+# Set permissions
+RUN chmod +x router.py
 
-# Настройка переменных окружения
-ENV NODE_ENV=production \
-    DOCKER_MODE=true \
-    DATA_DIR=/data \
-    LOGS_DIR=/var/log/meetingbot \
-    AUDIO_DIR=/data/audio \
-    TEMP_DIR=/tmp \
-    PULSEAUDIO_SINK=meeting_bot_sink \
-    PULSEAUDIO_SOURCE=meeting_bot_source
-
-# Открытие порта
+# Expose port
 EXPOSE 3000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD node scripts/healthcheck.js || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
 
-# Команда запуска
-CMD ["node", "src/index.js"]
+# Start the application
+CMD ["node", "telegram_bot.js"]
