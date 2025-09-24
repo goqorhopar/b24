@@ -37,16 +37,15 @@ jobs:
           
           # Создание .env файла
           cat > .env << 'EOF'
-          NODE_ENV=production
+          LOG_LEVEL=INFO
           PORT=3000
           HOST=0.0.0.0
-          TELEGRAM_BOT_TOKEN=7992998044:AAHUNEIBP9nqIC7fmpHqBKAPcoQM5ltrWuI
-          BITRIX_WEBHOOK_URL=https://skill-to-lead.bitrix24.ru/rest/1403/cmf3ncejqif8ny31/
-          GEMINI_API_KEY=AIzaSyDQR42zm4pcRMkY9KzKvEmXm7hyR8UzxHI
-          ADMIN_CHAT_ID=7537953397
-          RENDER_EXTERNAL_URL=https://109.172.47.253
-          PUPPETEER_HEADLESS=true
-          TZ=Europe/Moscow
+          USE_POLLING=true
+          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          BITRIX_WEBHOOK_URL=${{ secrets.BITRIX_WEBHOOK_URL }}
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          BITRIX_USER_ID=1
+          DATABASE_URL=sqlite:///bot_state.db
           EOF
           
           # Установка зависимостей
@@ -69,14 +68,15 @@ jobs:
           ExecStart=/root/b24/venv/bin/python /root/b24/main.py
           Restart=always
           RestartSec=10
-          Environment=NODE_ENV=production
-          Environment=TELEGRAM_BOT_TOKEN=7992998044:AAHUNEIBP9nqIC7fmpHqBKAPcoQM5ltrWuI
-          Environment=BITRIX_WEBHOOK_URL=https://skill-to-lead.bitrix24.ru/rest/1403/cmf3ncejqif8ny31/
-          Environment=GEMINI_API_KEY=AIzaSyDQR42zm4pcRMkY9KzKvEmXm7hyR8UzxHI
-          Environment=ADMIN_CHAT_ID=7537953397
-          Environment=RENDER_EXTERNAL_URL=https://109.172.47.253
-          Environment=PUPPETEER_HEADLESS=true
-          Environment=TZ=Europe/Moscow
+          Environment=LOG_LEVEL=INFO
+          Environment=PORT=3000
+          Environment=HOST=0.0.0.0
+          Environment=USE_POLLING=true
+          Environment=TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          Environment=BITRIX_WEBHOOK_URL=${{ secrets.BITRIX_WEBHOOK_URL }}
+          Environment=GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          Environment=BITRIX_USER_ID=1
+          Environment=DATABASE_URL=sqlite:///bot_state.db
           
           [Install]
           WantedBy=multi-user.target
