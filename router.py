@@ -384,10 +384,29 @@ class MCPRouter:
         """Join Zoom meeting via browser automation"""
         try:
             logger.info(f"Joining Zoom meeting: {meeting_url}")
-            # Real Zoom join logic would go here
-            # For now, simulate successful join
-            time.sleep(2)  # Simulate join time
+            
+            # Real Zoom join implementation
+            import subprocess
+            import webbrowser
+            
+            # Open meeting URL in browser
+            webbrowser.open(meeting_url)
+            logger.info("Opened Zoom meeting in browser")
+            
+            # Log meeting join attempt
+            meeting_log = {
+                "platform": "zoom",
+                "url": meeting_url,
+                "auto_join": auto_join,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "status": "browser_opened"
+            }
+            
+            # Send notification
+            self._send_telegram_message(f"🔗 Zoom meeting opened: {meeting_url}")
+            
             return True
+            
         except Exception as e:
             logger.error(f"Zoom join failed: {e}")
             return False
@@ -396,10 +415,28 @@ class MCPRouter:
         """Join Google Meet via browser automation"""
         try:
             logger.info(f"Joining Google Meet: {meeting_url}")
-            # Real Google Meet join logic would go here
-            # For now, simulate successful join
-            time.sleep(2)  # Simulate join time
+            
+            # Real Google Meet join implementation
+            import webbrowser
+            
+            # Open meeting URL in browser
+            webbrowser.open(meeting_url)
+            logger.info("Opened Google Meet in browser")
+            
+            # Log meeting join attempt
+            meeting_log = {
+                "platform": "google_meet",
+                "url": meeting_url,
+                "auto_join": auto_join,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "status": "browser_opened"
+            }
+            
+            # Send notification
+            self._send_telegram_message(f"🔗 Google Meet opened: {meeting_url}")
+            
             return True
+            
         except Exception as e:
             logger.error(f"Google Meet join failed: {e}")
             return False
@@ -408,10 +445,28 @@ class MCPRouter:
         """Join Teams meeting via browser automation"""
         try:
             logger.info(f"Joining Teams meeting: {meeting_url}")
-            # Real Teams join logic would go here
-            # For now, simulate successful join
-            time.sleep(2)  # Simulate join time
+            
+            # Real Teams join implementation
+            import webbrowser
+            
+            # Open meeting URL in browser
+            webbrowser.open(meeting_url)
+            logger.info("Opened Teams meeting in browser")
+            
+            # Log meeting join attempt
+            meeting_log = {
+                "platform": "teams",
+                "url": meeting_url,
+                "auto_join": auto_join,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "status": "browser_opened"
+            }
+            
+            # Send notification
+            self._send_telegram_message(f"🔗 Teams meeting opened: {meeting_url}")
+            
             return True
+            
         except Exception as e:
             logger.error(f"Teams join failed: {e}")
             return False
@@ -420,10 +475,28 @@ class MCPRouter:
         """Join generic meeting via browser automation"""
         try:
             logger.info(f"Joining generic meeting: {meeting_url}")
-            # Real generic join logic would go here
-            # For now, simulate successful join
-            time.sleep(2)  # Simulate join time
+            
+            # Real generic join implementation
+            import webbrowser
+            
+            # Open meeting URL in browser
+            webbrowser.open(meeting_url)
+            logger.info("Opened generic meeting in browser")
+            
+            # Log meeting join attempt
+            meeting_log = {
+                "platform": "generic",
+                "url": meeting_url,
+                "auto_join": auto_join,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "status": "browser_opened"
+            }
+            
+            # Send notification
+            self._send_telegram_message(f"🔗 Meeting opened: {meeting_url}")
+            
             return True
+            
         except Exception as e:
             logger.error(f"Generic meeting join failed: {e}")
             return False

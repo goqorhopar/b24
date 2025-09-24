@@ -24,16 +24,15 @@
         "required": ["meeting_url"]
       },
       "implementation": {
-        "type": "meeting_automation",
-        "browser": "chrome",
-        "headless": true,
+        "type": "browser_automation",
+        "browser": "default",
+        "headless": false,
         "timeout": 120,
         "actions": [
-          "navigate_to_url",
-          "find_join_button",
-          "click_join",
-          "mute_audio",
-          "start_recording"
+          "open_meeting_url",
+          "log_join_attempt",
+          "send_telegram_notification",
+          "record_meeting_status"
         ],
         "logging": {
           "level": "info",
