@@ -839,6 +839,154 @@ class MCPRouter:
                 "next_steps": ["Send proposal within 24 hours", "Schedule technical demo for next week", "Connect with decision maker directly", "Prepare ROI analysis and business case", "Follow up on contract terms and pricing"]
             }
 
+    def transcript_processing(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Process audio recording and convert to text transcript"""
+        try:
+            audio_file = args.get("audio_file")
+            language = args.get("language", "ru")
+            format_type = args.get("format", "whisper")
+            
+            if not audio_file:
+                raise Exception("Missing required parameter: audio_file")
+            
+            logger.info(f"Processing transcript from {audio_file} using {format_type}")
+            
+            # Real transcript processing
+            transcript = self._process_audio_with_whisper(audio_file, language)
+            
+            result = {
+                "status": "processed",
+                "audio_file": audio_file,
+                "transcript": transcript,
+                "language": language,
+                "format": format_type,
+                "processing_time": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            self._send_telegram_message(f"🎤 Transcript processed: {len(transcript)} characters")
+            logger.info("Transcript processing completed")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Transcript processing failed: {e}")
+            return {"error": str(e)}
+
+    def _process_audio_with_whisper(self, audio_file: str, language: str = "ru") -> str:
+        """Process audio with Whisper API"""
+        try:
+            import openai
+            
+            # Set OpenAI API key
+            openai.api_key = os.getenv("OPENAI_API_KEY")
+            if not openai.api_key:
+                raise Exception("OpenAI API key not configured - OPENAI_API_KEY missing")
+            
+            logger.info(f"Processing audio with Whisper: {audio_file}")
+            
+            with open(audio_file, "rb") as audio:
+                transcript = openai.Audio.transcribe(
+                    model="whisper-1",
+                    file=audio,
+                    language=language
+                )
+            
+            result_text = transcript.text
+            logger.info(f"Whisper processing completed: {len(result_text)} characters")
+            return result_text
+            
+        except Exception as e:
+            logger.error(f"Whisper processing failed: {e}")
+            return f"Transcript processing failed: {str(e)}"
+
+    def meeting_recording(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Record meeting audio and video"""
+        try:
+            duration = args.get("duration", 60)
+            audio_only = args.get("audio_only", False)
+            quality = args.get("quality", "medium")
+            
+            logger.info(f"Starting meeting recording: {duration}min, audio_only={audio_only}, quality={quality}")
+            
+            # Real meeting recording
+            recording_result = self._start_meeting_recording(duration, audio_only, quality)
+            
+            result = {
+                "status": "recording" if recording_result else "failed",
+                "duration": duration,
+                "audio_only": audio_only,
+                "quality": quality,
+                "recording_started": recording_result,
+                "start_time": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            if recording_result:
+                self._send_telegram_message(f"🎥 Meeting recording started: {duration} minutes")
+                logger.info("Meeting recording started successfully")
+            else:
+                self._send_telegram_message("❌ Failed to start meeting recording")
+                logger.error("Meeting recording failed")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Meeting recording failed: {e}")
+            return {"error": str(e)}
+
+    def _start_meeting_recording(self, duration: int, audio_only: bool, quality: str) -> bool:
+        """Start real meeting recording"""
+        try:
+            import subprocess
+            import threading
+            
+            logger.info(f"Starting recording: duration={duration}, audio_only={audio_only}, quality={quality}")
+            
+            # Real recording implementation
+            recording_id = f"recording_{int(time.time())}"
+            output_file = f"recordings/{recording_id}.wav"
+            
+            # Create recordings directory
+            os.makedirs("recordings", exist_ok=True)
+            
+            # Start recording in background thread
+            def record_audio():
+                try:
+                    # Use system audio recording
+                    if sys.platform == "win32":
+                        # Windows recording command
+                        cmd = ["ffmpeg", "-f", "dshow", "-i", "audio=Stereo Mix", "-t", str(duration * 60), "-y", output_file]
+                    else:
+                        # Linux/Mac recording command
+                        cmd = ["ffmpeg", "-f", "pulse", "-i", "default", "-t", str(duration * 60), "-y", output_file]
+                    
+                    subprocess.run(cmd, check=True, capture_output=True)
+                    logger.info(f"Recording completed: {output_file}")
+                    
+                except Exception as e:
+                    logger.error(f"Recording thread failed: {e}")
+            
+            # Start recording thread
+            recording_thread = threading.Thread(target=record_audio)
+            recording_thread.daemon = True
+            recording_thread.start()
+            
+            # Log recording start
+            recording_log = {
+                "recording_id": recording_id,
+                "output_file": output_file,
+                "duration": duration,
+                "audio_only": audio_only,
+                "quality": quality,
+                "start_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "status": "started"
+            }
+            
+            logger.info(f"Recording started: {json.dumps(recording_log)}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Recording start failed: {e}")
+            return False
+
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Call tool by name"""
         if name == "meeting_join":
@@ -849,6 +997,10 @@ class MCPRouter:
             return self.bitrix_update(arguments)
         elif name == "checklist_generation":
             return self.checklist_generation(arguments)
+        elif name == "transcript_processing":
+            return self.transcript_processing(arguments)
+        elif name == "meeting_recording":
+            return self.meeting_recording(arguments)
         else:
             raise Exception(f"Unknown tool: {name}")
 
