@@ -1,5 +1,0 @@
-[33mc263982[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m Настройка автоматического деплоя через GitHub Actions
-[33m1d207e5[m Fix: Add missing detect_platform method to MeetingPlatformDetector
-[33m1ee43b5[m Final fixes: consistent config imports and thorough code review
-[33m339ef19[m Fix import errors and update requirements.txt
-[33m361e01c[m Fix meeting URL detection

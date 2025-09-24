@@ -1,0 +1,337 @@
+{
+  "test_requests": [
+    {
+      "name": "List Tools",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {}
+      },
+      "expected_response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "tools": [
+            {
+              "name": "meeting_join",
+              "description": "Join a meeting and start recording audio/video with real meeting access"
+            },
+            {
+              "name": "meeting_analyze",
+              "description": "Analyze meeting transcript using Gemini AI and generate actionable insights"
+            },
+            {
+              "name": "bitrix_update",
+              "description": "Update Bitrix24 CRM with meeting results and create tasks"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Meeting Analysis Test - Real Transcript",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+          "name": "meeting_analyze",
+          "arguments": {
+            "transcript": "Встреча по проекту автоматизации продаж. Участники: Иван Петров (менеджер по продажам), Мария Сидорова (директор по развитию, ООО ТехноСистемы). Иван: Добро пожаловать на встречу, Мария! Расскажите о ваших потребностях в автоматизации. Мария: Нам нужно автоматизировать процесс обработки заявок и интеграцию с CRM. Сейчас у нас 50+ заявок в день, и мы тратим много времени на ручную обработку. Иван: Понимаю. У нас есть решение, которое сократит время обработки на 70% и увеличит конверсию на 25%. Мария: Это звучит интересно. Какие сроки реализации и бюджет? Иван: Мы можем запустить пилотный проект через 2 недели. Бюджет от 500 тысяч рублей. Мария: У нас есть бюджет на этот квартал. Когда можем начать? Иван: Отлично! Отправлю вам коммерческое предложение до конца недели с детальным планом. Мария: Жду вашего предложения. Также нужно обсудить интеграцию с нашей 1С. Иван: Конечно, это включено в решение. До свидания!",
+            "meeting_url": "https://meet.google.com/kiv-jwvm-ctr",
+            "lead_id": "12345"
+          }
+        }
+      },
+      "expected_response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "status": "analyzed",
+          "meeting_url": "https://meet.google.com/kiv-jwvm-ctr",
+          "analysis": {
+            "summary": "Обсуждение автоматизации продаж с клиентом ООО ТехноСистемы. Клиент заинтересован в автоматизации обработки заявок и интеграции с CRM.",
+            "decisions": ["Запуск пилотного проекта через 2 недели", "Интеграция с 1С включена в решение"],
+            "action_items": [
+              {
+                "task": "Отправить коммерческое предложение с детальным планом",
+                "deadline": "2024-12-27",
+                "assignee": "Иван Петров",
+                "priority": "High"
+              },
+              {
+                "task": "Подготовить план интеграции с 1С",
+                "deadline": "2024-12-30",
+                "assignee": "Техническая команда",
+                "priority": "Medium"
+              }
+            ],
+            "lead_score": 9,
+            "next_steps": ["Подготовка коммерческого предложения", "Планирование интеграции с 1С"],
+            "risks": ["Конкуренция за бюджет в квартале"],
+            "opportunities": ["Высокий интерес клиента", "Есть бюджет", "Четкие потребности", "Готовность к быстрому старту"],
+            "budget_indicators": ["Бюджет от 500 тысяч рублей", "Есть бюджет на квартал"],
+            "decision_makers": ["Мария Сидорова - директор по развитию"],
+            "timeline_urgency": "High"
+          },
+          "lead_id": "12345",
+          "analysis_time": "2024-12-24 10:45:00"
+        }
+      }
+    },
+    {
+      "name": "Bitrix Update Test - Real Update",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+          "name": "bitrix_update",
+          "arguments": {
+            "lead_id": "12345",
+            "summary": "Обсуждение автоматизации продаж с клиентом ООО ТехноСистемы. Клиент заинтересован в автоматизации обработки заявок и интеграции с CRM.",
+            "tasks": [
+              {
+                "task": "Отправить коммерческое предложение с детальным планом",
+                "deadline": "2024-12-27",
+                "assignee": "Иван Петров",
+                "priority": "High"
+              },
+              {
+                "task": "Подготовить план интеграции с 1С",
+                "deadline": "2024-12-30",
+                "assignee": "Техническая команда",
+                "priority": "Medium"
+              }
+            ],
+            "status": "MEETING_COMPLETED"
+          }
+        }
+      },
+      "expected_response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "status": "updated",
+          "lead_id": "12345",
+          "summary": "Обсуждение автоматизации продаж с клиентом ООО ТехноСистемы. Клиент заинтересован в автоматизации обработки заявок и интеграции с CRM.",
+          "tasks_created": 2,
+          "update_time": "2024-12-24 10:45:00"
+        }
+      }
+    },
+    {
+      "name": "Meeting Join Test - Real Join",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+          "name": "meeting_join",
+          "arguments": {
+            "meeting_url": "https://meet.google.com/kiv-jwvm-ctr",
+            "platform": "meet"
+          }
+        }
+      },
+      "expected_response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "status": "joined",
+          "meeting_url": "https://meet.google.com/kiv-jwvm-ctr",
+          "platform": "meet",
+          "join_time": "2024-12-24 10:45:00",
+          "recording_started": true,
+          "meeting_id": "meeting_1735028700",
+          "participants_detected": true
+        }
+      }
+    },
+    {
+      "name": "List Prompts",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "prompts/list",
+        "params": {}
+      },
+      "expected_response": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "prompts": [
+            {
+              "name": "meeting_analysis",
+              "description": "Analyze meeting transcript and generate comprehensive report with actionable insights"
+            },
+            {
+              "name": "task_generation",
+              "description": "Generate actionable tasks from meeting analysis with clear ownership and deadlines"
+            },
+            {
+              "name": "lead_qualification",
+              "description": "Qualify lead based on meeting content and BANT criteria"
+            },
+            {
+              "name": "follow_up_email",
+              "description": "Generate professional follow-up email based on meeting analysis"
+            },
+            {
+              "name": "meeting_checklist",
+              "description": "Generate meeting preparation and follow-up checklist"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get Prompt - Meeting Analysis",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "prompts/get",
+        "params": {
+          "name": "meeting_analysis",
+          "arguments": {
+            "transcript": "Test transcript",
+            "meeting_url": "https://meet.google.com/test"
+          }
+        }
+      },
+      "expected_response": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": {
+          "description": "Analyze meeting transcript and generate comprehensive report with actionable insights",
+          "messages": [
+            {
+              "role": "user",
+              "content": {
+                "type": "text",
+                "text": "Analyze this meeting transcript using Gemini AI and provide comprehensive business analysis:\n\nMeeting URL: https://meet.google.com/test\nLead ID: \nTranscript: Test transcript\n\nProvide detailed analysis including:\n1. Meeting summary (2-3 sentences)\n2. Key decisions made\n3. Action items with deadlines and assignees\n4. Lead qualification score (1-10)\n5. Next steps and follow-up\n6. Risk assessment\n7. Opportunities identified\n8. Budget indicators\n9. Decision makers identified\n10. Timeline urgency\n\nReturn ONLY valid JSON format:\n{\n  \"summary\": \"Brief meeting summary\",\n  \"decisions\": [\"Decision 1\", \"Decision 2\"],\n  \"action_items\": [\n    {\n      \"task\": \"Task description\",\n      \"deadline\": \"YYYY-MM-DD\",\n      \"assignee\": \"Name\",\n      \"priority\": \"High/Medium/Low\"\n    }\n  ],\n  \"lead_score\": 8,\n  \"next_steps\": [\"Step 1\", \"Step 2\"],\n  \"risks\": [\"Risk 1\", \"Risk 2\"],\n  \"opportunities\": [\"Opportunity 1\", \"Opportunity 2\"],\n  \"budget_indicators\": [\"Indicator 1\", \"Indicator 2\"],\n  \"decision_makers\": [\"Name 1\", \"Name 2\"],\n  \"timeline_urgency\": \"High/Medium/Low\"\n}"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Checklist Generation Test - Real Generation",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+          "name": "checklist_generation",
+          "arguments": {
+            "meeting_type": "sales",
+            "lead_info": "ООО ТехноСистемы, Мария Сидорова - директор по развитию, нужна автоматизация продаж",
+            "industry": "IT",
+            "meeting_duration": 60
+          }
+        }
+      },
+      "expected_response": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+          "status": "generated",
+          "meeting_type": "sales",
+          "checklist": {
+            "pre_meeting": [
+              "Research company background and recent news",
+              "Prepare personalized demo based on pain points",
+              "Set up meeting recording and note-taking tools",
+              "Review lead's previous interactions and history",
+              "Prepare qualifying questions and objection handling"
+            ],
+            "during_meeting": [
+              "Introduce yourself and establish rapport",
+              "Ask discovery questions about current challenges",
+              "Present relevant solution features and benefits",
+              "Identify decision makers and budget authority",
+              "Document key pain points and requirements",
+              "Confirm next steps and timeline"
+            ],
+            "post_meeting": [
+              "Send follow-up email within 2 hours",
+              "Update CRM with meeting notes and outcomes",
+              "Schedule next meeting or demo if qualified",
+              "Share relevant case studies or materials",
+              "Follow up on any outstanding questions"
+            ],
+            "documentation": [
+              "Meeting notes with key decisions",
+              "Action items with owners and deadlines",
+              "Lead qualification score and status",
+              "Next meeting agenda and objectives",
+              "Competitive landscape and positioning"
+            ],
+            "next_steps": [
+              "Send proposal within 24 hours",
+              "Schedule technical demo for next week",
+              "Connect with decision maker directly",
+              "Prepare ROI analysis and business case",
+              "Follow up on contract terms and pricing"
+            ]
+          },
+          "generation_time": "2024-12-24 10:45:00"
+        }
+      }
+    },
+    {
+      "name": "Full Workflow Test - Complete Meeting Process",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": {
+          "name": "meeting_analyze",
+          "arguments": {
+            "transcript": "Встреча по проекту автоматизации продаж. Участники: Иван Петров (менеджер по продажам), Мария Сидорова (директор по развитию, ООО ТехноСистемы). Иван: Добро пожаловать на встречу, Мария! Расскажите о ваших потребностях в автоматизации. Мария: Нам нужно автоматизировать процесс обработки заявок и интеграцию с CRM. Сейчас у нас 50+ заявок в день, и мы тратим много времени на ручную обработку. Иван: Понимаю. У нас есть решение, которое сократит время обработки на 70% и увеличит конверсию на 25%. Мария: Это звучит интересно. Какие сроки реализации и бюджет? Иван: Мы можем запустить пилотный проект через 2 недели. Бюджет от 500 тысяч рублей. Мария: У нас есть бюджет на этот квартал. Когда можем начать? Иван: Отлично! Отправлю вам коммерческое предложение до конца недели с детальным планом. Мария: Жду вашего предложения. Также нужно обсудить интеграцию с нашей 1С. Иван: Конечно, это включено в решение. До свидания!",
+            "meeting_url": "https://meet.google.com/kiv-jwvm-ctr",
+            "lead_id": "12345",
+            "analysis_type": "full"
+          }
+        }
+      },
+      "expected_response": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "result": {
+          "status": "analyzed",
+          "meeting_url": "https://meet.google.com/kiv-jwvm-ctr",
+          "analysis": {
+            "summary": "Обсуждение автоматизации продаж с клиентом ООО ТехноСистемы. Клиент заинтересован в автоматизации обработки заявок и интеграции с CRM.",
+            "decisions": ["Запуск пилотного проекта через 2 недели", "Интеграция с 1С включена в решение"],
+            "action_items": [
+              {
+                "task": "Отправить коммерческое предложение с детальным планом",
+                "deadline": "2024-12-27",
+                "assignee": "Иван Петров",
+                "priority": "High"
+              },
+              {
+                "task": "Подготовить план интеграции с 1С",
+                "deadline": "2024-12-30",
+                "assignee": "Техническая команда",
+                "priority": "Medium"
+              }
+            ],
+            "lead_score": 9,
+            "next_steps": ["Подготовка коммерческого предложения", "Планирование интеграции с 1С"],
+            "risks": ["Конкуренция за бюджет в квартале"],
+            "opportunities": ["Высокий интерес клиента", "Есть бюджет", "Четкие потребности", "Готовность к быстрому старту"],
+            "budget_indicators": ["Бюджет от 500 тысяч рублей", "Есть бюджет на квартал"],
+            "decision_makers": ["Мария Сидорова - директор по развитию"],
+            "timeline_urgency": "High"
+          },
+          "lead_id": "12345",
+          "analysis_time": "2024-12-24 10:45:00"
+        }
+      }
+    }
+  ]
+}

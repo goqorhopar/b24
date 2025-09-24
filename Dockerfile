@@ -1,57 +1,74 @@
-# Dockerfile для Telegram Meeting Bot
-FROM python:3.11-slim
+# Multi-stage build для оптимизации размера образа
+FROM node:18-alpine AS base
 
-# Устанавливаем системные зависимости
-RUN apt-get update && apt-get install -y \
-    wget \
-    gnupg \
-    unzip \
-    curl \
-    xvfb \
+# Установка системных зависимостей
+RUN apk add --no-cache \
+    chromium \
+    nss \
+    freetype \
+    freetype-dev \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont \
+    ffmpeg \
     pulseaudio \
-    pulseaudio-utils \
-    alsa-utils \
-    && rm -rf /var/lib/apt/lists/*
+    pulseaudio-dev \
+    alsa-lib \
+    alsa-lib-dev \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/cache/apk/*
 
-# Устанавливаем Google Chrome
-RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update \
-    && apt-get install -y google-chrome-stable \
-    && rm -rf /var/lib/apt/lists/*
+# Настройка Puppeteer для работы с Chromium
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser \
+    CHROME_BIN=/usr/bin/chromium-browser \
+    CHROME_PATH=/usr/bin/chromium-browser
 
-# Создаем пользователя для запуска приложения
-RUN useradd -m -s /bin/bash botuser
+# Создание пользователя для безопасности
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S meetingbot -u 1001 -G nodejs
 
-# Устанавливаем рабочую директорию
+# Установка рабочей директории
 WORKDIR /app
 
-# Копируем requirements.txt и устанавливаем Python зависимости
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Копирование package.json и package-lock.json
+COPY package*.json ./
 
-# Копируем исходный код
-COPY src/ ./src/
-COPY *.py ./
+# Установка зависимостей
+RUN npm ci --only=production && npm cache clean --force
 
-# Создаем директории для данных
-RUN mkdir -p /app/data/recordings /app/data/logs /app/data/backups \
-    && chown -R botuser:botuser /app
+# Копирование исходного кода
+COPY --chown=meetingbot:nodejs . .
 
-# Переключаемся на непривилегированного пользователя
-USER botuser
+# Создание необходимых директорий
+RUN mkdir -p /data/audio/raw /data/audio/processed /var/log/meetingbot /tmp && \
+    chown -R meetingbot:nodejs /data /var/log/meetingbot /tmp
 
-# Настраиваем переменные окружения
-ENV PYTHONPATH=/app
-ENV DISPLAY=:99
-ENV PULSE_RUNTIME_PATH=/tmp/pulse
+# Настройка PulseAudio для пользователя
+RUN mkdir -p /home/meetingbot/.config/pulse && \
+    chown -R meetingbot:nodejs /home/meetingbot
+
+# Переключение на пользователя meetingbot
+USER meetingbot
+
+# Настройка переменных окружения
+ENV NODE_ENV=production \
+    DOCKER_MODE=true \
+    DATA_DIR=/data \
+    LOGS_DIR=/var/log/meetingbot \
+    AUDIO_DIR=/data/audio \
+    TEMP_DIR=/tmp \
+    PULSEAUDIO_SINK=meeting_bot_sink \
+    PULSEAUDIO_SOURCE=meeting_bot_source
+
+# Открытие порта
+EXPOSE 3000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:5000/health || exit 1
-
-# Открываем порт
-EXPOSE 5000
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD node scripts/healthcheck.js || exit 1
 
 # Команда запуска
-CMD ["python", "main.py"]
+CMD ["node", "src/index.js"]
