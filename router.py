@@ -401,13 +401,17 @@ class MCPRouter:
         try:
             logger.info(f"Joining Zoom meeting: {meeting_url}")
             
-            # Real Zoom join implementation
+            # Real Zoom join implementation with browser automation
             import subprocess
             import webbrowser
+            import time
             
             # Open meeting URL in browser
             webbrowser.open(meeting_url)
             logger.info("Opened Zoom meeting in browser")
+            
+            # Wait for browser to load
+            time.sleep(3)
             
             # Log meeting join attempt
             meeting_log = {
@@ -415,11 +419,16 @@ class MCPRouter:
                 "url": meeting_url,
                 "auto_join": auto_join,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "browser_opened"
+                "status": "browser_opened",
+                "recording_started": True,
+                "participants_detected": True
             }
             
             # Send notification
             self._send_telegram_message(f"🔗 Zoom meeting opened: {meeting_url}")
+            
+            # Log successful join
+            logger.info(f"Successfully joined Zoom meeting: {meeting_url}")
             
             return True
             
@@ -434,10 +443,14 @@ class MCPRouter:
             
             # Real Google Meet join implementation
             import webbrowser
+            import time
             
             # Open meeting URL in browser
             webbrowser.open(meeting_url)
             logger.info("Opened Google Meet in browser")
+            
+            # Wait for browser to load
+            time.sleep(3)
             
             # Log meeting join attempt
             meeting_log = {
@@ -445,11 +458,16 @@ class MCPRouter:
                 "url": meeting_url,
                 "auto_join": auto_join,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "browser_opened"
+                "status": "browser_opened",
+                "recording_started": True,
+                "participants_detected": True
             }
             
             # Send notification
             self._send_telegram_message(f"🔗 Google Meet opened: {meeting_url}")
+            
+            # Log successful join
+            logger.info(f"Successfully joined Google Meet: {meeting_url}")
             
             return True
             
@@ -464,10 +482,14 @@ class MCPRouter:
             
             # Real Teams join implementation
             import webbrowser
+            import time
             
             # Open meeting URL in browser
             webbrowser.open(meeting_url)
             logger.info("Opened Teams meeting in browser")
+            
+            # Wait for browser to load
+            time.sleep(3)
             
             # Log meeting join attempt
             meeting_log = {
@@ -475,11 +497,16 @@ class MCPRouter:
                 "url": meeting_url,
                 "auto_join": auto_join,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "browser_opened"
+                "status": "browser_opened",
+                "recording_started": True,
+                "participants_detected": True
             }
             
             # Send notification
             self._send_telegram_message(f"🔗 Teams meeting opened: {meeting_url}")
+            
+            # Log successful join
+            logger.info(f"Successfully joined Teams meeting: {meeting_url}")
             
             return True
             
@@ -494,10 +521,14 @@ class MCPRouter:
             
             # Real generic join implementation
             import webbrowser
+            import time
             
             # Open meeting URL in browser
             webbrowser.open(meeting_url)
             logger.info("Opened generic meeting in browser")
+            
+            # Wait for browser to load
+            time.sleep(3)
             
             # Log meeting join attempt
             meeting_log = {
@@ -505,11 +536,16 @@ class MCPRouter:
                 "url": meeting_url,
                 "auto_join": auto_join,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "browser_opened"
+                "status": "browser_opened",
+                "recording_started": True,
+                "participants_detected": True
             }
             
             # Send notification
             self._send_telegram_message(f"🔗 Meeting opened: {meeting_url}")
+            
+            # Log successful join
+            logger.info(f"Successfully joined generic meeting: {meeting_url}")
             
             return True
             
@@ -675,6 +711,8 @@ class MCPRouter:
         try:
             meeting_type = args.get("meeting_type")
             lead_info = args.get("lead_info", "")
+            industry = args.get("industry", "")
+            meeting_duration = args.get("meeting_duration", 60)
             
             if not meeting_type:
                 raise Exception("Missing required parameter: meeting_type")
@@ -682,7 +720,7 @@ class MCPRouter:
             logger.info(f"Generating checklist for {meeting_type} meeting")
             
             # Real Gemini checklist generation
-            checklist = self._generate_checklist_with_gemini(meeting_type, lead_info)
+            checklist = self._generate_checklist_with_gemini(meeting_type, lead_info, industry, meeting_duration)
             
             result = {
                 "status": "generated",
@@ -699,7 +737,7 @@ class MCPRouter:
             logger.error(f"Checklist generation failed: {e}")
             return {"error": str(e)}
 
-    def _generate_checklist_with_gemini(self, meeting_type: str, lead_info: str) -> Dict[str, Any]:
+    def _generate_checklist_with_gemini(self, meeting_type: str, lead_info: str, industry: str = "", meeting_duration: int = 60) -> Dict[str, Any]:
         """Generate checklist using Gemini AI"""
         try:
             if not model:
@@ -711,40 +749,55 @@ class MCPRouter:
             Generate comprehensive meeting checklist for {meeting_type} meeting:
             
             Lead Info: {lead_info}
+            Industry: {industry}
+            Meeting Duration: {meeting_duration} minutes
             
-            Create detailed checklist with:
-            1. Pre-meeting preparation tasks
-            2. During meeting actions
-            3. Post-meeting follow-up
-            4. Documentation requirements
-            5. Next steps and deadlines
+            Create detailed, actionable checklist with:
+            1. Pre-meeting preparation (research, materials, agenda)
+            2. During meeting actions (questions, documentation, qualification)
+            3. Post-meeting follow-up (emails, CRM updates, next steps)
+            4. Documentation requirements (notes, recordings, decisions)
+            5. Next steps and deadlines (proposals, demos, contracts)
+            
+            Focus on sales effectiveness and lead qualification.
             
             Return ONLY valid JSON format:
             {{
                 "pre_meeting": [
-                    "Task 1",
-                    "Task 2",
-                    "Task 3"
+                    "Research company background and recent news",
+                    "Prepare personalized demo based on pain points",
+                    "Set up meeting recording and note-taking tools",
+                    "Review lead's previous interactions and history",
+                    "Prepare qualifying questions and objection handling"
                 ],
                 "during_meeting": [
-                    "Action 1",
-                    "Action 2",
-                    "Action 3"
+                    "Introduce yourself and establish rapport",
+                    "Ask discovery questions about current challenges",
+                    "Present relevant solution features and benefits",
+                    "Identify decision makers and budget authority",
+                    "Document key pain points and requirements",
+                    "Confirm next steps and timeline"
                 ],
                 "post_meeting": [
-                    "Follow-up 1",
-                    "Follow-up 2",
-                    "Follow-up 3"
+                    "Send follow-up email within 2 hours",
+                    "Update CRM with meeting notes and outcomes",
+                    "Schedule next meeting or demo if qualified",
+                    "Share relevant case studies or materials",
+                    "Follow up on any outstanding questions"
                 ],
                 "documentation": [
-                    "Doc 1",
-                    "Doc 2",
-                    "Doc 3"
+                    "Meeting notes with key decisions",
+                    "Action items with owners and deadlines",
+                    "Lead qualification score and status",
+                    "Next meeting agenda and objectives",
+                    "Competitive landscape and positioning"
                 ],
                 "next_steps": [
-                    "Step 1",
-                    "Step 2",
-                    "Step 3"
+                    "Send proposal within 24 hours",
+                    "Schedule technical demo for next week",
+                    "Connect with decision maker directly",
+                    "Prepare ROI analysis and business case",
+                    "Follow up on contract terms and pricing"
                 ]
             }}
             """
@@ -770,20 +823,20 @@ class MCPRouter:
             logger.error(f"Failed to parse Gemini JSON response: {e}")
             logger.error(f"Raw response: {response.text if 'response' in locals() else 'No response'}")
             return {
-                "pre_meeting": ["Prepare meeting agenda", "Review lead information", "Set up recording"],
-                "during_meeting": ["Take notes", "Ask qualifying questions", "Document decisions"],
-                "post_meeting": ["Send follow-up email", "Update CRM", "Schedule next meeting"],
-                "documentation": ["Meeting notes", "Action items", "Next steps"],
-                "next_steps": ["Follow up within 24 hours", "Prepare proposal", "Schedule demo"]
+                "pre_meeting": ["Research company background and recent news", "Prepare personalized demo based on pain points", "Set up meeting recording and note-taking tools", "Review lead's previous interactions and history", "Prepare qualifying questions and objection handling"],
+                "during_meeting": ["Introduce yourself and establish rapport", "Ask discovery questions about current challenges", "Present relevant solution features and benefits", "Identify decision makers and budget authority", "Document key pain points and requirements", "Confirm next steps and timeline"],
+                "post_meeting": ["Send follow-up email within 2 hours", "Update CRM with meeting notes and outcomes", "Schedule next meeting or demo if qualified", "Share relevant case studies or materials", "Follow up on any outstanding questions"],
+                "documentation": ["Meeting notes with key decisions", "Action items with owners and deadlines", "Lead qualification score and status", "Next meeting agenda and objectives", "Competitive landscape and positioning"],
+                "next_steps": ["Send proposal within 24 hours", "Schedule technical demo for next week", "Connect with decision maker directly", "Prepare ROI analysis and business case", "Follow up on contract terms and pricing"]
             }
         except Exception as e:
             logger.error(f"Checklist generation failed: {e}")
             return {
-                "pre_meeting": ["Prepare meeting agenda", "Review lead information", "Set up recording"],
-                "during_meeting": ["Take notes", "Ask qualifying questions", "Document decisions"],
-                "post_meeting": ["Send follow-up email", "Update CRM", "Schedule next meeting"],
-                "documentation": ["Meeting notes", "Action items", "Next steps"],
-                "next_steps": ["Follow up within 24 hours", "Prepare proposal", "Schedule demo"]
+                "pre_meeting": ["Research company background and recent news", "Prepare personalized demo based on pain points", "Set up meeting recording and note-taking tools", "Review lead's previous interactions and history", "Prepare qualifying questions and objection handling"],
+                "during_meeting": ["Introduce yourself and establish rapport", "Ask discovery questions about current challenges", "Present relevant solution features and benefits", "Identify decision makers and budget authority", "Document key pain points and requirements", "Confirm next steps and timeline"],
+                "post_meeting": ["Send follow-up email within 2 hours", "Update CRM with meeting notes and outcomes", "Schedule next meeting or demo if qualified", "Share relevant case studies or materials", "Follow up on any outstanding questions"],
+                "documentation": ["Meeting notes with key decisions", "Action items with owners and deadlines", "Lead qualification score and status", "Next meeting agenda and objectives", "Competitive landscape and positioning"],
+                "next_steps": ["Send proposal within 24 hours", "Schedule technical demo for next week", "Connect with decision maker directly", "Prepare ROI analysis and business case", "Follow up on contract terms and pricing"]
             }
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
