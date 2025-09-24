@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import os
 import sqlite3
 import logging
-from typing import Dict, Any, Optional
+import os
 from config import config
 
 log = logging.getLogger("db")
@@ -14,47 +13,36 @@ def init_db():
     Инициализация базы данных
     """
     try:
-        db_path = config.DATABASE_URL.replace("sqlite:///", "")
-        if not os.path.exists(db_path):
-            os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        db_path = "bot_state.db"
         
+        # Создание подключения к базе данных
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # Создание таблиц
-        cursor.execute("""
+        # Создание таблицы для состояний пользователей
+        cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_states (
                 user_id INTEGER PRIMARY KEY,
-                state TEXT NOT NULL DEFAULT 'idle',
+                state TEXT DEFAULT 'idle',
                 meeting_url TEXT,
                 platform TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        ''')
         
-        cursor.execute("""
+        # Создание таблицы для логов встреч
+        cursor.execute('''
             CREATE TABLE IF NOT EXISTS meeting_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                meeting_url TEXT NOT NULL,
+                user_id INTEGER,
+                meeting_url TEXT,
                 platform TEXT,
                 analysis_result TEXT,
                 lead_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS bot_stats (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date DATE NOT NULL,
-                meetings_processed INTEGER DEFAULT 0,
-                leads_updated INTEGER DEFAULT 0,
-                tasks_created INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        ''')
         
         conn.commit()
         conn.close()
@@ -63,22 +51,20 @@ def init_db():
         
     except Exception as e:
         log.error(f"Ошибка инициализации базы данных: {e}")
-        raise
 
 def save_user_state(user_id: int, state: str, meeting_url: str = None, platform: str = None):
     """
     Сохранение состояния пользователя
     """
     try:
-        db_path = config.DATABASE_URL.replace("sqlite:///", "")
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect("bot_state.db")
         cursor = conn.cursor()
         
-        cursor.execute("""
+        cursor.execute('''
             INSERT OR REPLACE INTO user_states 
             (user_id, state, meeting_url, platform, updated_at)
             VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-        """, (user_id, state, meeting_url, platform))
+        ''', (user_id, state, meeting_url, platform))
         
         conn.commit()
         conn.close()
@@ -86,19 +72,19 @@ def save_user_state(user_id: int, state: str, meeting_url: str = None, platform:
     except Exception as e:
         log.error(f"Ошибка сохранения состояния пользователя {user_id}: {e}")
 
-def get_user_state(user_id: int) -> Optional[Dict[str, Any]]:
+def get_user_state(user_id: int) -> dict:
     """
     Получение состояния пользователя
     """
     try:
-        db_path = config.DATABASE_URL.replace("sqlite:///", "")
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect("bot_state.db")
         cursor = conn.cursor()
         
-        cursor.execute("""
-            SELECT state, meeting_url, platform, created_at, updated_at
-            FROM user_states WHERE user_id = ?
-        """, (user_id,))
+        cursor.execute('''
+            SELECT state, meeting_url, platform 
+            FROM user_states 
+            WHERE user_id = ?
+        ''', (user_id,))
         
         result = cursor.fetchone()
         conn.close()
@@ -107,30 +93,28 @@ def get_user_state(user_id: int) -> Optional[Dict[str, Any]]:
             return {
                 "state": result[0],
                 "meeting_url": result[1],
-                "platform": result[2],
-                "created_at": result[3],
-                "updated_at": result[4]
+                "platform": result[2]
             }
-        return None
-        
+        else:
+            return {"state": "idle"}
+            
     except Exception as e:
         log.error(f"Ошибка получения состояния пользователя {user_id}: {e}")
-        return None
+        return {"state": "idle"}
 
-def log_meeting(user_id: int, meeting_url: str, platform: str, analysis_result: str = None, lead_id: int = None):
+def log_meeting(user_id: int, meeting_url: str, platform: str, analysis_result: str, lead_id: int = None):
     """
     Логирование встречи
     """
     try:
-        db_path = config.DATABASE_URL.replace("sqlite:///", "")
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect("bot_state.db")
         cursor = conn.cursor()
         
-        cursor.execute("""
+        cursor.execute('''
             INSERT INTO meeting_logs 
             (user_id, meeting_url, platform, analysis_result, lead_id)
             VALUES (?, ?, ?, ?, ?)
-        """, (user_id, meeting_url, platform, analysis_result, lead_id))
+        ''', (user_id, meeting_url, platform, analysis_result, lead_id))
         
         conn.commit()
         conn.close()
@@ -139,46 +123,3 @@ def log_meeting(user_id: int, meeting_url: str, platform: str, analysis_result: 
         
     except Exception as e:
         log.error(f"Ошибка логирования встречи: {e}")
-
-def get_meeting_stats() -> Dict[str, Any]:
-    """
-    Получение статистики встреч
-    """
-    try:
-        db_path = config.DATABASE_URL.replace("sqlite:///", "")
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        # Общее количество встреч
-        cursor.execute("SELECT COUNT(*) FROM meeting_logs")
-        total_meetings = cursor.fetchone()[0]
-        
-        # Встречи за последние 7 дней
-        cursor.execute("""
-            SELECT COUNT(*) FROM meeting_logs 
-            WHERE created_at >= datetime('now', '-7 days')
-        """)
-        recent_meetings = cursor.fetchone()[0]
-        
-        # Платформы
-        cursor.execute("""
-            SELECT platform, COUNT(*) FROM meeting_logs 
-            GROUP BY platform ORDER BY COUNT(*) DESC
-        """)
-        platforms = dict(cursor.fetchall())
-        
-        conn.close()
-        
-        return {
-            "total_meetings": total_meetings,
-            "recent_meetings": recent_meetings,
-            "platforms": platforms
-        }
-        
-    except Exception as e:
-        log.error(f"Ошибка получения статистики: {e}")
-        return {
-            "total_meetings": 0,
-            "recent_meetings": 0,
-            "platforms": {}
-        }

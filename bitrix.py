@@ -1,150 +1,105 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import os
-import logging
 import requests
-from typing import Dict, List, Any, Optional
+import logging
 from config import config
 
 log = logging.getLogger("bitrix")
 
-def update_lead_comprehensive(
-    lead_id: int,
-    meeting_summary: str,
-    lead_score: int = 8,
-    action_items: List[Dict[str, Any]] = None
-) -> bool:
+def update_lead_comprehensive(lead_id: int, meeting_summary: str, lead_score: int, action_items: list) -> bool:
     """
     Комплексное обновление лида в Bitrix24
     """
-    if not config.BITRIX_WEBHOOK_URL:
-        log.error("BITRIX_WEBHOOK_URL не настроен")
-        return False
-    
     try:
+        webhook_url = config.BITRIX_WEBHOOK_URL
+        if not webhook_url:
+            log.error("BITRIX_WEBHOOK_URL не настроен")
+            return False
+
         # Обновление лида
         lead_data = {
-            "fields": {
-                "TITLE": f"Лид {lead_id} - Встреча проведена",
-                "COMMENTS": meeting_summary,
-                "UF_CRM_LEAD_SCORE": lead_score,
-                "STATUS_ID": "IN_PROCESS"
-            }
+            "TITLE": f"Встреча проведена - Оценка: {lead_score}/10",
+            "COMMENTS": meeting_summary,
+            "UF_CRM_LEAD_SCORE": lead_score
         }
-        
-        # Отправка обновления лида
-        lead_response = requests.post(
-            f"{config.BITRIX_WEBHOOK_URL}/crm.lead.update",
-            json={"id": lead_id, "fields": lead_data["fields"]},
-            timeout=10
-        )
-        
-        if lead_response.status_code != 200:
-            log.error(f"Ошибка обновления лида: {lead_response.status_code}")
-            return False
-        
-        # Создание задач из action_items
-        if action_items:
-            for item in action_items:
-                task_data = {
-                    "fields": {
-                        "TITLE": item.get("task", "Задача из встречи"),
-                        "DESCRIPTION": f"Задача создана автоматически из встречи для лида {lead_id}",
-                        "RESPONSIBLE_ID": config.BITRIX_USER_ID or "1",
-                        "DEADLINE": item.get("deadline", ""),
-                        "PRIORITY": _map_priority(item.get("priority", "Medium")),
-                        "UF_CRM_TASK": [f"L_{lead_id}"]  # Связь с лидом
-                    }
-                }
-                
-                task_response = requests.post(
-                    f"{config.BITRIX_WEBHOOK_URL}/tasks.task.add",
-                    json=task_data,
-                    timeout=10
-                )
-                
-                if task_response.status_code == 200:
-                    log.info(f"Создана задача: {item.get('task')}")
-                else:
-                    log.error(f"Ошибка создания задачи: {task_response.status_code}")
-        
-        log.info(f"Лид {lead_id} успешно обновлен")
-        return True
-        
-    except Exception as e:
-        log.error(f"Ошибка обновления лида {lead_id}: {e}")
-        return False
 
-def get_lead_info(lead_id: int) -> Optional[Dict[str, Any]]:
-    """
-    Получение информации о лиде
-    """
-    if not config.BITRIX_WEBHOOK_URL:
-        log.error("BITRIX_WEBHOOK_URL не настроен")
-        return None
-    
-    try:
+        # Отправка запроса на обновление лида
         response = requests.post(
-            f"{config.BITRIX_WEBHOOK_URL}/crm.lead.get",
-            json={"id": lead_id},
+            f"{webhook_url}/crm.lead.update",
+            json={
+                "id": lead_id,
+                "fields": lead_data
+            },
             timeout=10
         )
-        
-        if response.status_code == 200:
-            return response.json().get("result")
-        else:
-            log.error(f"Ошибка получения лида: {response.status_code}")
-            return None
-            
-    except Exception as e:
-        log.error(f"Ошибка получения лида {lead_id}: {e}")
-        return None
 
-def create_activity(lead_id: int, activity_type: str, description: str) -> bool:
-    """
-    Создание активности для лида
-    """
-    if not config.BITRIX_WEBHOOK_URL:
-        log.error("BITRIX_WEBHOOK_URL не настроен")
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("result"):
+                log.info(f"Лид {lead_id} успешно обновлен")
+                
+                # Создание задач
+                for item in action_items:
+                    create_task(
+                        title=item.get("task", ""),
+                        description=f"Создано из встречи. Приоритет: {item.get('priority', 'Medium')}",
+                        deadline=item.get("deadline", ""),
+                        responsible_id=config.BITRIX_USER_ID or 1
+                    )
+                
+                return True
+            else:
+                log.error(f"Ошибка обновления лида {lead_id}: {result}")
+                return False
+        else:
+            log.error(f"HTTP ошибка при обновлении лида {lead_id}: {response.status_code}")
+            return False
+
+    except Exception as e:
+        log.error(f"Исключение при обновлении лида {lead_id}: {e}")
         return False
-    
+
+def create_task(title: str, description: str, deadline: str = "", responsible_id: int = 1) -> bool:
+    """
+    Создание задачи в Bitrix24
+    """
     try:
-        activity_data = {
-            "fields": {
-                "TYPE_ID": activity_type,  # 1 - звонок, 2 - встреча, 3 - задача
-                "SUBJECT": f"Встреча с лидом {lead_id}",
-                "DESCRIPTION": description,
-                "OWNER_TYPE_ID": 1,  # Лид
-                "OWNER_ID": lead_id,
-                "RESPONSIBLE_ID": config.BITRIX_USER_ID or "1"
-            }
+        webhook_url = config.BITRIX_WEBHOOK_URL
+        if not webhook_url:
+            log.error("BITRIX_WEBHOOK_URL не настроен")
+            return False
+
+        task_data = {
+            "TITLE": title,
+            "DESCRIPTION": description,
+            "RESPONSIBLE_ID": responsible_id,
+            "CREATED_BY": responsible_id
         }
-        
+
+        if deadline:
+            task_data["DEADLINE"] = deadline
+
         response = requests.post(
-            f"{config.BITRIX_WEBHOOK_URL}/crm.activity.add",
-            json=activity_data,
+            f"{webhook_url}/tasks.task.add",
+            json={
+                "fields": task_data
+            },
             timeout=10
         )
-        
-        if response.status_code == 200:
-            log.info(f"Создана активность для лида {lead_id}")
-            return True
-        else:
-            log.error(f"Ошибка создания активности: {response.status_code}")
-            return False
-            
-    except Exception as e:
-        log.error(f"Ошибка создания активности для лида {lead_id}: {e}")
-        return False
 
-def _map_priority(priority: str) -> str:
-    """
-    Маппинг приоритета задачи
-    """
-    priority_map = {
-        "High": "3",
-        "Medium": "2", 
-        "Low": "1"
-    }
-    return priority_map.get(priority, "2")
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("result"):
+                log.info(f"Задача '{title}' успешно создана")
+                return True
+            else:
+                log.error(f"Ошибка создания задачи: {result}")
+                return False
+        else:
+            log.error(f"HTTP ошибка при создании задачи: {response.status_code}")
+            return False
+
+    except Exception as e:
+        log.error(f"Исключение при создании задачи: {e}")
+        return False
