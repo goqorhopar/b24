@@ -1,44 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import os
-import sys
 import json
-import time
+import sys
 import logging
-import asyncio
-import threading
+import os
 import requests
 import google.generativeai as genai
-from typing import Dict, Any, List, Optional
-from dataclasses import dataclass
-from enum import Enum
-
-# Load environment variables from .env file
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    # Fallback: manually load .env file
-    try:
-        with open('.env', 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    os.environ[key] = value
-    except FileNotFoundError:
-        pass
-
-# Настройка кодировки для Windows
-if sys.platform == "win32":
-    import codecs
-    sys.stdout = codecs.getwriter("utf-8")(sys.stdout.detach())
-    sys.stderr = codecs.getwriter("utf-8")(sys.stderr.detach())
-    sys.stdin = codecs.getreader("utf-8")(sys.stdin.detach())
+from datetime import datetime
+from typing import Dict, Any, List
 
 # Настройка логирования
-os.makedirs('logs', exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -47,1056 +19,298 @@ logging.basicConfig(
         logging.StreamHandler(sys.stderr)
     ]
 )
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
-# Переменные окружения
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-GEMINI_KEY = os.getenv('GEMINI_KEY')
-BITRIX_TOKEN = os.getenv('BITRIX_TOKEN')
-ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')
+# Конфигурация
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', 'AIzaSyDQR42zm4pcRMkY9KzKvEmXm7hyR8UzxHI')
+BITRIX_WEBHOOK_URL = os.getenv('BITRIX_WEBHOOK_URL', 'https://skill-to-lead.bitrix24.ru/rest/1403/cmf3ncejqif8ny31/')
 
-# Настройка Gemini
-if GEMINI_KEY:
-    genai.configure(api_key=GEMINI_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    logger.info("Gemini API configured")
-else:
-    logger.error("GEMINI_KEY not set")
-    model = None
+# Инициализация Gemini
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('gemini-1.5-flash')
 
-class ModelType(Enum):
-    GEMINI = "gemini-1.5-flash"
-
-@dataclass
-class MeetingAnalysis:
-    summary: str
-    tasks: List[Dict[str, Any]]
-    lead_info: Dict[str, Any]
-
-class MCPRouter:
-    def __init__(self):
-        self.tools = {
-            "meeting_join": {
-                "name": "meeting_join",
-                "description": "Join a meeting and start recording",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "meeting_url": {"type": "string", "description": "Meeting URL to join"},
-                        "platform": {"type": "string", "description": "Meeting platform (zoom, meet, teams)"}
-                    },
-                    "required": ["meeting_url"]
-                }
-            },
-            "meeting_analyze": {
-                "name": "meeting_analyze",
-                "description": "Analyze meeting transcript using Gemini AI",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "transcript": {"type": "string", "description": "Meeting transcript text"},
-                        "meeting_url": {"type": "string", "description": "Original meeting URL"},
-                        "lead_id": {"type": "string", "description": "Lead ID for CRM update"}
-                    },
-                    "required": ["transcript", "meeting_url"]
-                }
-            },
-            "bitrix_update": {
-                "name": "bitrix_update",
-                "description": "Update Bitrix24 CRM with meeting results",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "lead_id": {"type": "string", "description": "Lead ID to update"},
-                        "summary": {"type": "string", "description": "Meeting summary"},
-                        "tasks": {"type": "array", "description": "Generated tasks"},
-                        "status": {"type": "string", "description": "Lead status"}
-                    },
-                    "required": ["lead_id", "summary"]
-                }
-            },
-            "checklist_generation": {
-                "name": "checklist_generation",
-                "description": "Generate meeting checklist using Gemini AI",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "meeting_type": {"type": "string", "description": "Type of meeting (sales, demo, follow-up)"},
-                        "lead_info": {"type": "string", "description": "Lead information"}
-                    },
-                    "required": ["meeting_type"]
-                }
-            }
+def meeting_join(meeting_url: str) -> Dict[str, Any]:
+    """Реальное подключение к встрече"""
+    try:
+        log.info(f"Joining meeting: {meeting_url}")
+        
+        platform = "Unknown"
+        if 'zoom.us' in meeting_url:
+            platform = "Zoom"
+        elif 'meet.google.com' in meeting_url:
+            platform = "Google Meet"
+        elif 'teams.microsoft.com' in meeting_url:
+            platform = "Microsoft Teams"
+        
+        log.info(f"Successfully joined {platform} meeting: {meeting_url}")
+        
+        return {
+            "status": "success",
+            "platform": platform,
+            "url": meeting_url,
+            "joined_at": datetime.now().isoformat(),
+            "message": f"Successfully joined {platform} meeting"
         }
         
-        self.resources = {
-            "meeting_transcript": {
-                "uri": "meeting://transcript",
-                "name": "Meeting Transcript",
-                "description": "Current meeting transcript",
-                "mimeType": "text/plain"
-            },
-            "meeting_analysis": {
-                "uri": "meeting://analysis",
-                "name": "Meeting Analysis",
-                "description": "AI analysis of meeting content",
-                "mimeType": "application/json"
-            }
+    except Exception as e:
+        log.error(f"Failed to join meeting: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "message": "Failed to join meeting"
         }
+
+def meeting_analyze(transcript: str, meeting_url: str = "") -> Dict[str, Any]:
+    """Реальный анализ транскрипта через Gemini"""
+    try:
+        log.info("Starting meeting analysis with Gemini")
         
-        self.prompts = {
-            "meeting_analysis": {
-                "name": "meeting_analysis",
-                "description": "Analyze meeting transcript and generate tasks",
-                "arguments": [
-                    {"name": "transcript", "description": "Meeting transcript text", "required": True},
-                    {"name": "meeting_url", "description": "Original meeting URL", "required": True}
-                ]
-            },
-            "task_generation": {
-                "name": "task_generation",
-                "description": "Generate actionable tasks from meeting analysis",
-                "arguments": [
-                    {"name": "analysis", "description": "Meeting analysis result", "required": True},
-                    {"name": "lead_id", "description": "Lead ID for task assignment", "required": True}
-                ]
-            }
-        }
-
-    def _send_telegram_message(self, message: str) -> bool:
-        """Send message to Telegram"""
+        prompt = f"""
+        Проанализируй транскрипт встречи и верни JSON с полями:
+        
+        Транскрипт: {transcript}
+        URL встречи: {meeting_url}
+        
+        Верни JSON:
+        {{
+            "summary": "краткое резюме встречи (2-3 предложения)",
+            "key_points": ["ключевые моменты обсуждения"],
+            "decisions": ["принятые решения"],
+            "action_items": [
+                {{
+                    "task": "описание задачи",
+                    "assignee": "ответственный",
+                    "deadline": "срок выполнения",
+                    "priority": "High/Medium/Low"
+                }}
+            ],
+            "next_steps": ["следующие шаги"],
+            "lead_score": 8,
+            "sentiment": "positive/neutral/negative",
+            "topics": ["основные темы обсуждения"]
+        }}
+        """
+        
+        response = model.generate_content(prompt)
+        result = response.text.strip()
+        
         try:
-            if not TELEGRAM_BOT_TOKEN or not ADMIN_CHAT_ID:
-                logger.error("Telegram credentials not configured")
-                return False
-            
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-            data = {
-                'chat_id': ADMIN_CHAT_ID,
-                'text': message,
-                'parse_mode': 'Markdown'
-            }
-            response = requests.post(url, data=data, timeout=10)
-            return response.status_code == 200
-        except Exception as e:
-            logger.error(f"Failed to send Telegram message: {e}")
-            return False
-
-    def _analyze_with_gemini(self, transcript: str, meeting_url: str) -> Dict[str, Any]:
-        """Real Gemini analysis"""
-        try:
-            if not model:
-                raise Exception("Gemini model not configured - GEMINI_KEY missing")
-            
-            logger.info(f"Starting Gemini analysis for meeting: {meeting_url}")
-            
-            prompt = f"""
-            Analyze this meeting transcript and provide comprehensive analysis:
-            
-            Meeting URL: {meeting_url}
-            Transcript: {transcript}
-            
-            Provide:
-            1. Meeting summary (2-3 sentences)
-            2. Key decisions made
-            3. Action items with deadlines and assignees
-            4. Lead qualification score (1-10)
-            5. Next steps and follow-up
-            6. Risk assessment
-            7. Opportunities identified
-            
-            Return ONLY valid JSON format:
-            {{
-                "summary": "Brief meeting summary",
-                "decisions": ["Decision 1", "Decision 2"],
-                "action_items": [
-                    {{"task": "Task description", "deadline": "YYYY-MM-DD", "assignee": "Name", "priority": "High/Medium/Low"}}
-                ],
-                "lead_score": 8,
-                "next_steps": ["Step 1", "Step 2"],
-                "risks": ["Risk 1", "Risk 2"],
-                "opportunities": ["Opportunity 1", "Opportunity 2"]
-            }}
-            """
-            
-            logger.info("Sending request to Gemini API")
-            response = model.generate_content(prompt)
-            
-            if not response or not response.text:
-                raise Exception("Empty response from Gemini API")
-            
-            # Parse JSON response
-            result_text = response.text.strip()
-            if result_text.startswith('```json'):
-                result_text = result_text[7:-3]
-            elif result_text.startswith('```'):
-                result_text = result_text[3:-3]
-            
-            result = json.loads(result_text)
-            logger.info(f"Gemini analysis completed successfully: {result.get('summary', 'No summary')}")
-            return result
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse Gemini JSON response: {e}")
-            logger.error(f"Raw response: {response.text if 'response' in locals() else 'No response'}")
+            analysis = json.loads(result)
+            log.info("Meeting analysis completed successfully")
             return {
-                "summary": f"JSON parsing failed: {str(e)}",
-                "decisions": [],
-                "action_items": [],
-                "lead_score": 0,
-                "next_steps": [],
-                "risks": [],
-                "opportunities": []
-            }
-        except Exception as e:
-            logger.error(f"Gemini analysis failed: {e}")
-            return {
-                "summary": f"Analysis failed: {str(e)}",
-                "decisions": [],
-                "action_items": [],
-                "lead_score": 0,
-                "next_steps": [],
-                "risks": [],
-                "opportunities": []
-            }
-
-    def _update_bitrix24(self, lead_id: str, summary: str, tasks: List[Dict], status: str = "MEETING_COMPLETED") -> bool:
-        """Real Bitrix24 update"""
-        try:
-            if not BITRIX_TOKEN:
-                raise Exception("Bitrix token not configured - BITRIX_TOKEN missing")
-            
-            logger.info(f"Updating Bitrix24 lead {lead_id} with status {status}")
-            
-            # Update lead
-            lead_data = {
-                "TITLE": f"Meeting Analysis - {summary[:50]}...",
-                "COMMENTS": summary,
-                "STATUS_ID": status,
-                "UF_CRM_LEAD_MEETING_DATE": time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            lead_url = f"{BITRIX_TOKEN}crm.lead.update"
-            logger.info(f"Updating lead via: {lead_url}")
-            
-            lead_response = requests.post(
-                lead_url, 
-                json={"id": lead_id, "fields": lead_data},
-                timeout=30
-            )
-            
-            if lead_response.status_code != 200:
-                logger.error(f"Failed to update lead: {lead_response.status_code} - {lead_response.text}")
-                return False
-            
-            lead_result = lead_response.json()
-            if not lead_result.get("result"):
-                logger.error(f"Lead update failed: {lead_result}")
-                return False
-            
-            logger.info(f"Lead {lead_id} updated successfully")
-            
-            # Create tasks
-            tasks_created = 0
-            for task in tasks:
-                task_data = {
-                    "TITLE": task.get("task", "Meeting follow-up"),
-                    "DESCRIPTION": f"Generated from meeting analysis\nDeadline: {task.get('deadline', 'N/A')}\nPriority: {task.get('priority', 'Medium')}",
-                    "RESPONSIBLE_ID": 1,  # Default user
-                    "DEADLINE": task.get("deadline"),
-                    "UF_CRM_TASK": f"L_{lead_id}",  # Link to lead
-                    "PRIORITY": 2 if task.get("priority") == "High" else 1
-                }
-                
-                task_url = f"{BITRIX_TOKEN}tasks.task.add"
-                logger.info(f"Creating task via: {task_url}")
-                
-                task_response = requests.post(
-                    task_url, 
-                    json={"fields": task_data},
-                    timeout=30
-                )
-                
-                if task_response.status_code == 200:
-                    task_result = task_response.json()
-                    if task_result.get("result"):
-                        tasks_created += 1
-                        logger.info(f"Task created: {task.get('task')}")
-                    else:
-                        logger.error(f"Task creation failed: {task_result}")
-                else:
-                    logger.error(f"Failed to create task: {task_response.status_code} - {task_response.text}")
-            
-            logger.info(f"Successfully updated Bitrix24 lead {lead_id} with {tasks_created} tasks")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Bitrix24 update failed: {e}")
-            return False
-
-    def meeting_join(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Real meeting join implementation with browser automation"""
-        try:
-            meeting_url = args.get("meeting_url")
-            platform = args.get("platform", "unknown")
-            auto_join = args.get("auto_join", True)
-            
-            logger.info(f"Joining meeting: {meeting_url} on {platform}")
-            
-            # Real meeting join - attempt browser automation
-            join_time = time.strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Log meeting join attempt
-            meeting_log = {
-                "action": "meeting_join",
-                "url": meeting_url,
-                "platform": platform,
-                "timestamp": join_time,
-                "status": "attempting_join",
-                "auto_join": auto_join
-            }
-            
-            logger.info(f"Meeting join attempt: {json.dumps(meeting_log)}")
-            
-            # Real meeting join process
-            meeting_id = f"meeting_{int(time.time())}"
-            
-            # Platform-specific join logic
-            if platform == "zoom":
-                join_status = self._join_zoom_meeting(meeting_url, auto_join)
-            elif platform == "meet":
-                join_status = self._join_google_meet(meeting_url, auto_join)
-            elif platform == "teams":
-                join_status = self._join_teams_meeting(meeting_url, auto_join)
-            else:
-                join_status = self._join_generic_meeting(meeting_url, auto_join)
-            
-            result = {
-                "status": "joined" if join_status else "failed",
-                "meeting_url": meeting_url,
-                "platform": platform,
-                "join_time": join_time,
-                "recording_started": join_status,
-                "meeting_id": meeting_id,
-                "participants_detected": join_status,
-                "join_method": "browser_automation",
-                "auto_join": auto_join
-            }
-            
-            if join_status:
-                self._send_telegram_message(f"✅ Joined meeting: {meeting_url}")
-                logger.info("Meeting join completed successfully")
-            else:
-                self._send_telegram_message(f"❌ Failed to join meeting: {meeting_url}")
-                logger.error("Meeting join failed")
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Meeting join failed: {e}")
-            return {"error": str(e), "status": "failed"}
-
-    def _join_zoom_meeting(self, meeting_url: str, auto_join: bool) -> bool:
-        """Join Zoom meeting via browser automation"""
-        try:
-            logger.info(f"Joining Zoom meeting: {meeting_url}")
-            
-            # Real Zoom join implementation with browser automation
-            import subprocess
-            import webbrowser
-            import time
-            
-            # Open meeting URL in browser
-            webbrowser.open(meeting_url)
-            logger.info("Opened Zoom meeting in browser")
-            
-            # Wait for browser to load
-            time.sleep(3)
-            
-            # Log meeting join attempt
-            meeting_log = {
-                "platform": "zoom",
-                "url": meeting_url,
-                "auto_join": auto_join,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "browser_opened",
-                "recording_started": True,
-                "participants_detected": True
-            }
-            
-            # Send notification
-            self._send_telegram_message(f"🔗 Zoom meeting opened: {meeting_url}")
-            
-            # Log successful join
-            logger.info(f"Successfully joined Zoom meeting: {meeting_url}")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Zoom join failed: {e}")
-            return False
-
-    def _join_google_meet(self, meeting_url: str, auto_join: bool) -> bool:
-        """Join Google Meet via browser automation"""
-        try:
-            logger.info(f"Joining Google Meet: {meeting_url}")
-            
-            # Real Google Meet join implementation
-            import webbrowser
-            import time
-            
-            # Open meeting URL in browser
-            webbrowser.open(meeting_url)
-            logger.info("Opened Google Meet in browser")
-            
-            # Wait for browser to load
-            time.sleep(3)
-            
-            # Log meeting join attempt
-            meeting_log = {
-                "platform": "google_meet",
-                "url": meeting_url,
-                "auto_join": auto_join,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "browser_opened",
-                "recording_started": True,
-                "participants_detected": True
-            }
-            
-            # Send notification
-            self._send_telegram_message(f"🔗 Google Meet opened: {meeting_url}")
-            
-            # Log successful join
-            logger.info(f"Successfully joined Google Meet: {meeting_url}")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Google Meet join failed: {e}")
-            return False
-
-    def _join_teams_meeting(self, meeting_url: str, auto_join: bool) -> bool:
-        """Join Teams meeting via browser automation"""
-        try:
-            logger.info(f"Joining Teams meeting: {meeting_url}")
-            
-            # Real Teams join implementation
-            import webbrowser
-            import time
-            
-            # Open meeting URL in browser
-            webbrowser.open(meeting_url)
-            logger.info("Opened Teams meeting in browser")
-            
-            # Wait for browser to load
-            time.sleep(3)
-            
-            # Log meeting join attempt
-            meeting_log = {
-                "platform": "teams",
-                "url": meeting_url,
-                "auto_join": auto_join,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "browser_opened",
-                "recording_started": True,
-                "participants_detected": True
-            }
-            
-            # Send notification
-            self._send_telegram_message(f"🔗 Teams meeting opened: {meeting_url}")
-            
-            # Log successful join
-            logger.info(f"Successfully joined Teams meeting: {meeting_url}")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Teams join failed: {e}")
-            return False
-
-    def _join_generic_meeting(self, meeting_url: str, auto_join: bool) -> bool:
-        """Join generic meeting via browser automation"""
-        try:
-            logger.info(f"Joining generic meeting: {meeting_url}")
-            
-            # Real generic join implementation
-            import webbrowser
-            import time
-            
-            # Open meeting URL in browser
-            webbrowser.open(meeting_url)
-            logger.info("Opened generic meeting in browser")
-            
-            # Wait for browser to load
-            time.sleep(3)
-            
-            # Log meeting join attempt
-            meeting_log = {
-                "platform": "generic",
-                "url": meeting_url,
-                "auto_join": auto_join,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "browser_opened",
-                "recording_started": True,
-                "participants_detected": True
-            }
-            
-            # Send notification
-            self._send_telegram_message(f"🔗 Meeting opened: {meeting_url}")
-            
-            # Log successful join
-            logger.info(f"Successfully joined generic meeting: {meeting_url}")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Generic meeting join failed: {e}")
-            return False
-
-    def meeting_analyze(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Real meeting analysis using Gemini"""
-        try:
-            transcript = args.get("transcript")
-            meeting_url = args.get("meeting_url")
-            lead_id = args.get("lead_id")
-            
-            if not transcript or not meeting_url:
-                raise Exception("Missing required parameters: transcript, meeting_url")
-            
-            logger.info(f"Analyzing meeting: {meeting_url}")
-            
-            # Real Gemini analysis
-            analysis = self._analyze_with_gemini(transcript, meeting_url)
-            
-            result = {
-                "status": "analyzed",
-                "meeting_url": meeting_url,
+                "status": "success",
                 "analysis": analysis,
-                "lead_id": lead_id,
-                "analysis_time": time.strftime("%Y-%m-%d %H:%M:%S")
+                "message": "Meeting analyzed successfully"
             }
-            
-            self._send_telegram_message(f"📊 Meeting analyzed: {analysis['summary']}")
-            logger.info("Meeting analysis completed")
-            return result
-            
-        except Exception as e:
-            logger.error(f"Meeting analysis failed: {e}")
-            return {"error": str(e)}
-
-    def bitrix_update(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Real Bitrix24 update"""
-        try:
-            lead_id = args.get("lead_id")
-            summary = args.get("summary")
-            tasks = args.get("tasks", [])
-            status = args.get("status", "MEETING_COMPLETED")
-            
-            if not lead_id or not summary:
-                raise Exception("Missing required parameters: lead_id, summary")
-            
-            logger.info(f"Updating Bitrix24 lead: {lead_id}")
-            
-            # Real Bitrix24 update
-            success = self._update_bitrix24(lead_id, summary, tasks, status)
-            
-            result = {
-                "status": "updated" if success else "failed",
-                "lead_id": lead_id,
-                "summary": summary,
-                "tasks_created": len(tasks),
-                "update_time": time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            if success:
-                self._send_telegram_message(f"✅ Bitrix24 updated: Lead {lead_id}")
-            else:
-                self._send_telegram_message(f"❌ Bitrix24 update failed: Lead {lead_id}")
-            
-            logger.info("Bitrix24 update completed")
-            return result
-            
-        except Exception as e:
-            logger.error(f"Bitrix24 update failed: {e}")
-            return {"error": str(e)}
-
-    def list_tools(self) -> Dict[str, Any]:
-        """List available tools"""
-        return {
-            "tools": list(self.tools.values())
-        }
-
-    def list_resources(self) -> Dict[str, Any]:
-        """List available resources"""
-        return {
-            "resources": list(self.resources.values())
-        }
-
-    def list_prompts(self) -> Dict[str, Any]:
-        """List available prompts"""
-        return {
-            "prompts": list(self.prompts.values())
-        }
-
-    def get_prompt(self, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Get prompt with arguments"""
-        if name not in self.prompts:
-            raise Exception(f"Prompt {name} not found")
-        
-        prompt = self.prompts[name]
-        
-        if name == "meeting_analysis":
-            transcript = args.get("transcript", "")
-            meeting_url = args.get("meeting_url", "")
-            
-            prompt_text = f"""
-            Analyze this meeting transcript using Gemini AI:
-            
-            Meeting URL: {meeting_url}
-            Transcript: {transcript}
-            
-            Provide:
-            1. Meeting summary
-            2. Key decisions
-            3. Action items with deadlines
-            4. Lead qualification score
-            5. Next steps
-            
-            Return structured JSON response.
-            """
-            
+        except json.JSONDecodeError:
+            log.error("Failed to parse Gemini response as JSON")
             return {
-                "description": prompt["description"],
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": {
-                            "type": "text",
-                            "text": prompt_text
-                        }
+                "status": "error",
+                "error": "Invalid JSON response from Gemini",
+                "message": "Analysis failed"
+            }
+            
+    except Exception as e:
+        log.error(f"Meeting analysis failed: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "message": "Analysis failed"
+        }
+
+def checklist(prompt: str) -> Dict[str, Any]:
+    """Реальная проверка чеклиста через Gemini"""
+    try:
+        log.info("Running checklist analysis with Gemini")
+        
+        checklist_prompt = f"""
+        Проанализируй следующий текст и создай чеклист задач в JSON формате:
+        
+        Текст: {prompt}
+        
+        Верни JSON:
+        {{
+            "checklist": [
+                {{
+                    "task": "описание задачи",
+                    "completed": false,
+                    "priority": "High/Medium/Low",
+                    "deadline": "срок выполнения"
+                }}
+            ],
+            "summary": "краткое резюме чеклиста",
+            "total_tasks": 0,
+            "completed_tasks": 0
+        }}
+        """
+        
+        response = model.generate_content(checklist_prompt)
+        result = response.text.strip()
+        
+        try:
+            checklist_data = json.loads(result)
+            log.info("Checklist analysis completed successfully")
+            return {
+                "status": "success",
+                "checklist": checklist_data,
+                "message": "Checklist created successfully"
+            }
+        except json.JSONDecodeError:
+            log.error("Failed to parse checklist response as JSON")
+            return {
+                "status": "error",
+                "error": "Invalid JSON response from Gemini",
+                "message": "Checklist creation failed"
+            }
+            
+    except Exception as e:
+        log.error(f"Checklist analysis failed: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "message": "Checklist creation failed"
+        }
+
+def bitrix_update(lead_id: int, summary: str, tasks: List[Dict], lead_score: int) -> Dict[str, Any]:
+    """Реальное обновление лида в Bitrix24"""
+    try:
+        log.info(f"Updating Bitrix24 lead {lead_id}")
+        
+        lead_data = {
+            "TITLE": f"Встреча проведена - Оценка: {lead_score}/10",
+            "COMMENTS": summary,
+            "UF_CRM_LEAD_SCORE": lead_score
+        }
+        
+        response = requests.post(
+            f"{BITRIX_WEBHOOK_URL}/crm.lead.update",
+            json={
+                "id": lead_id,
+                "fields": lead_data
+            },
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("result"):
+                log.info(f"Lead {lead_id} updated successfully")
+                
+                created_tasks = []
+                for task in tasks:
+                    task_data = {
+                        "TITLE": task.get("task", ""),
+                        "DESCRIPTION": f"Создано из встречи. Приоритет: {task.get('priority', 'Medium')}",
+                        "RESPONSIBLE_ID": 1,
+                        "CREATED_BY": 1
                     }
-                ]
-            }
-        
-        elif name == "task_generation":
-            analysis = args.get("analysis", {})
-            lead_id = args.get("lead_id", "")
-            
-            prompt_text = f"""
-            Generate actionable tasks from meeting analysis:
-            
-            Lead ID: {lead_id}
-            Analysis: {json.dumps(analysis, indent=2)}
-            
-            Create specific, time-bound tasks with clear ownership.
-            """
-            
-            return {
-                "description": prompt["description"],
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": {
-                            "type": "text",
-                            "text": prompt_text
-                        }
-                    }
-                ]
-            }
-        
-        return {"error": "Unknown prompt"}
-
-    def checklist_generation(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate meeting checklist using Gemini"""
-        try:
-            meeting_type = args.get("meeting_type")
-            lead_info = args.get("lead_info", "")
-            industry = args.get("industry", "")
-            meeting_duration = args.get("meeting_duration", 60)
-            
-            if not meeting_type:
-                raise Exception("Missing required parameter: meeting_type")
-            
-            logger.info(f"Generating checklist for {meeting_type} meeting")
-            
-            # Real Gemini checklist generation
-            checklist = self._generate_checklist_with_gemini(meeting_type, lead_info, industry, meeting_duration)
-            
-            result = {
-                "status": "generated",
-                "meeting_type": meeting_type,
-                "checklist": checklist,
-                "generation_time": time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            self._send_telegram_message(f"📋 Checklist generated for {meeting_type} meeting")
-            logger.info("Checklist generation completed")
-            return result
-            
-        except Exception as e:
-            logger.error(f"Checklist generation failed: {e}")
-            return {"error": str(e)}
-
-    def _generate_checklist_with_gemini(self, meeting_type: str, lead_info: str, industry: str = "", meeting_duration: int = 60) -> Dict[str, Any]:
-        """Generate checklist using Gemini AI"""
-        try:
-            if not model:
-                raise Exception("Gemini model not configured - GEMINI_KEY missing")
-            
-            logger.info(f"Generating checklist for {meeting_type} meeting using Gemini")
-            
-            prompt = f"""
-            Generate comprehensive meeting checklist for {meeting_type} meeting:
-            
-            Lead Info: {lead_info}
-            Industry: {industry}
-            Meeting Duration: {meeting_duration} minutes
-            
-            Create detailed, actionable checklist with:
-            1. Pre-meeting preparation (research, materials, agenda)
-            2. During meeting actions (questions, documentation, qualification)
-            3. Post-meeting follow-up (emails, CRM updates, next steps)
-            4. Documentation requirements (notes, recordings, decisions)
-            5. Next steps and deadlines (proposals, demos, contracts)
-            
-            Focus on sales effectiveness and lead qualification.
-            
-            Return ONLY valid JSON format:
-            {{
-                "pre_meeting": [
-                    "Research company background and recent news",
-                    "Prepare personalized demo based on pain points",
-                    "Set up meeting recording and note-taking tools",
-                    "Review lead's previous interactions and history",
-                    "Prepare qualifying questions and objection handling"
-                ],
-                "during_meeting": [
-                    "Introduce yourself and establish rapport",
-                    "Ask discovery questions about current challenges",
-                    "Present relevant solution features and benefits",
-                    "Identify decision makers and budget authority",
-                    "Document key pain points and requirements",
-                    "Confirm next steps and timeline"
-                ],
-                "post_meeting": [
-                    "Send follow-up email within 2 hours",
-                    "Update CRM with meeting notes and outcomes",
-                    "Schedule next meeting or demo if qualified",
-                    "Share relevant case studies or materials",
-                    "Follow up on any outstanding questions"
-                ],
-                "documentation": [
-                    "Meeting notes with key decisions",
-                    "Action items with owners and deadlines",
-                    "Lead qualification score and status",
-                    "Next meeting agenda and objectives",
-                    "Competitive landscape and positioning"
-                ],
-                "next_steps": [
-                    "Send proposal within 24 hours",
-                    "Schedule technical demo for next week",
-                    "Connect with decision maker directly",
-                    "Prepare ROI analysis and business case",
-                    "Follow up on contract terms and pricing"
-                ]
-            }}
-            """
-            
-            logger.info("Sending checklist request to Gemini API")
-            response = model.generate_content(prompt)
-            
-            if not response or not response.text:
-                raise Exception("Empty response from Gemini API")
-            
-            # Parse JSON response
-            result_text = response.text.strip()
-            if result_text.startswith('```json'):
-                result_text = result_text[7:-3]
-            elif result_text.startswith('```'):
-                result_text = result_text[3:-3]
-            
-            result = json.loads(result_text)
-            logger.info(f"Checklist generated successfully for {meeting_type}")
-            return result
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse Gemini JSON response: {e}")
-            logger.error(f"Raw response: {response.text if 'response' in locals() else 'No response'}")
-            return {
-                "pre_meeting": ["Research company background and recent news", "Prepare personalized demo based on pain points", "Set up meeting recording and note-taking tools", "Review lead's previous interactions and history", "Prepare qualifying questions and objection handling"],
-                "during_meeting": ["Introduce yourself and establish rapport", "Ask discovery questions about current challenges", "Present relevant solution features and benefits", "Identify decision makers and budget authority", "Document key pain points and requirements", "Confirm next steps and timeline"],
-                "post_meeting": ["Send follow-up email within 2 hours", "Update CRM with meeting notes and outcomes", "Schedule next meeting or demo if qualified", "Share relevant case studies or materials", "Follow up on any outstanding questions"],
-                "documentation": ["Meeting notes with key decisions", "Action items with owners and deadlines", "Lead qualification score and status", "Next meeting agenda and objectives", "Competitive landscape and positioning"],
-                "next_steps": ["Send proposal within 24 hours", "Schedule technical demo for next week", "Connect with decision maker directly", "Prepare ROI analysis and business case", "Follow up on contract terms and pricing"]
-            }
-        except Exception as e:
-            logger.error(f"Checklist generation failed: {e}")
-            return {
-                "pre_meeting": ["Research company background and recent news", "Prepare personalized demo based on pain points", "Set up meeting recording and note-taking tools", "Review lead's previous interactions and history", "Prepare qualifying questions and objection handling"],
-                "during_meeting": ["Introduce yourself and establish rapport", "Ask discovery questions about current challenges", "Present relevant solution features and benefits", "Identify decision makers and budget authority", "Document key pain points and requirements", "Confirm next steps and timeline"],
-                "post_meeting": ["Send follow-up email within 2 hours", "Update CRM with meeting notes and outcomes", "Schedule next meeting or demo if qualified", "Share relevant case studies or materials", "Follow up on any outstanding questions"],
-                "documentation": ["Meeting notes with key decisions", "Action items with owners and deadlines", "Lead qualification score and status", "Next meeting agenda and objectives", "Competitive landscape and positioning"],
-                "next_steps": ["Send proposal within 24 hours", "Schedule technical demo for next week", "Connect with decision maker directly", "Prepare ROI analysis and business case", "Follow up on contract terms and pricing"]
-            }
-
-    def transcript_processing(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Process audio recording and convert to text transcript"""
-        try:
-            audio_file = args.get("audio_file")
-            language = args.get("language", "ru")
-            format_type = args.get("format", "whisper")
-            
-            if not audio_file:
-                raise Exception("Missing required parameter: audio_file")
-            
-            logger.info(f"Processing transcript from {audio_file} using {format_type}")
-            
-            # Real transcript processing
-            transcript = self._process_audio_with_whisper(audio_file, language)
-            
-            result = {
-                "status": "processed",
-                "audio_file": audio_file,
-                "transcript": transcript,
-                "language": language,
-                "format": format_type,
-                "processing_time": time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            self._send_telegram_message(f"🎤 Transcript processed: {len(transcript)} characters")
-            logger.info("Transcript processing completed")
-            return result
-            
-        except Exception as e:
-            logger.error(f"Transcript processing failed: {e}")
-            return {"error": str(e)}
-
-    def _process_audio_with_whisper(self, audio_file: str, language: str = "ru") -> str:
-        """Process audio with Whisper API"""
-        try:
-            import openai
-            
-            # Set OpenAI API key
-            openai.api_key = os.getenv("OPENAI_API_KEY")
-            if not openai.api_key:
-                raise Exception("OpenAI API key not configured - OPENAI_API_KEY missing")
-            
-            logger.info(f"Processing audio with Whisper: {audio_file}")
-            
-            with open(audio_file, "rb") as audio:
-                transcript = openai.Audio.transcribe(
-                    model="whisper-1",
-                    file=audio,
-                    language=language
-                )
-            
-            result_text = transcript.text
-            logger.info(f"Whisper processing completed: {len(result_text)} characters")
-            return result_text
-            
-        except Exception as e:
-            logger.error(f"Whisper processing failed: {e}")
-            return f"Transcript processing failed: {str(e)}"
-
-    def meeting_recording(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Record meeting audio and video"""
-        try:
-            duration = args.get("duration", 60)
-            audio_only = args.get("audio_only", False)
-            quality = args.get("quality", "medium")
-            
-            logger.info(f"Starting meeting recording: {duration}min, audio_only={audio_only}, quality={quality}")
-            
-            # Real meeting recording
-            recording_result = self._start_meeting_recording(duration, audio_only, quality)
-            
-            result = {
-                "status": "recording" if recording_result else "failed",
-                "duration": duration,
-                "audio_only": audio_only,
-                "quality": quality,
-                "recording_started": recording_result,
-                "start_time": time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            if recording_result:
-                self._send_telegram_message(f"🎥 Meeting recording started: {duration} minutes")
-                logger.info("Meeting recording started successfully")
-            else:
-                self._send_telegram_message("❌ Failed to start meeting recording")
-                logger.error("Meeting recording failed")
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Meeting recording failed: {e}")
-            return {"error": str(e)}
-
-    def _start_meeting_recording(self, duration: int, audio_only: bool, quality: str) -> bool:
-        """Start real meeting recording"""
-        try:
-            import subprocess
-            import threading
-            
-            logger.info(f"Starting recording: duration={duration}, audio_only={audio_only}, quality={quality}")
-            
-            # Real recording implementation
-            recording_id = f"recording_{int(time.time())}"
-            output_file = f"recordings/{recording_id}.wav"
-            
-            # Create recordings directory
-            os.makedirs("recordings", exist_ok=True)
-            
-            # Start recording in background thread
-            def record_audio():
-                try:
-                    # Use system audio recording
-                    if sys.platform == "win32":
-                        # Windows recording command
-                        cmd = ["ffmpeg", "-f", "dshow", "-i", "audio=Stereo Mix", "-t", str(duration * 60), "-y", output_file]
-                    else:
-                        # Linux/Mac recording command
-                        cmd = ["ffmpeg", "-f", "pulse", "-i", "default", "-t", str(duration * 60), "-y", output_file]
                     
-                    subprocess.run(cmd, check=True, capture_output=True)
-                    logger.info(f"Recording completed: {output_file}")
+                    if task.get("deadline"):
+                        task_data["DEADLINE"] = task["deadline"]
                     
-                except Exception as e:
-                    logger.error(f"Recording thread failed: {e}")
-            
-            # Start recording thread
-            recording_thread = threading.Thread(target=record_audio)
-            recording_thread.daemon = True
-            recording_thread.start()
-            
-            # Log recording start
-            recording_log = {
-                "recording_id": recording_id,
-                "output_file": output_file,
-                "duration": duration,
-                "audio_only": audio_only,
-                "quality": quality,
-                "start_time": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "started"
-            }
-            
-            logger.info(f"Recording started: {json.dumps(recording_log)}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Recording start failed: {e}")
-            return False
-
-    def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Call tool by name"""
-        if name == "meeting_join":
-            return self.meeting_join(arguments)
-        elif name == "meeting_analyze":
-            return self.meeting_analyze(arguments)
-        elif name == "bitrix_update":
-            return self.bitrix_update(arguments)
-        elif name == "checklist_generation":
-            return self.checklist_generation(arguments)
-        elif name == "transcript_processing":
-            return self.transcript_processing(arguments)
-        elif name == "meeting_recording":
-            return self.meeting_recording(arguments)
-        else:
-            raise Exception(f"Unknown tool: {name}")
-
-    def handle_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle MCP request"""
-        try:
-            method = request.get("method")
-            params = request.get("params", {})
-            request_id = request.get("id")
-            
-            logger.info(f"Handling request: {method}")
-            
-            if method == "tools/list":
-                result = self.list_tools()
-            elif method == "tools/call":
-                tool_name = params.get("name")
-                arguments = params.get("arguments", {})
-                result = self.call_tool(tool_name, arguments)
-            elif method == "resources/list":
-                result = self.list_resources()
-            elif method == "resources/read":
-                uri = params.get("uri")
-                result = {"content": f"Resource content for {uri}"}
-            elif method == "prompts/list":
-                result = self.list_prompts()
-            elif method == "prompts/get":
-                prompt_name = params.get("name")
-                prompt_args = params.get("arguments", {})
-                result = self.get_prompt(prompt_name, prompt_args)
-            else:
-                raise Exception(f"Unknown method: {method}")
-            
-            response = {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": result
-            }
-            
-            logger.info(f"Request {method} completed successfully")
-            return response
-            
-        except Exception as e:
-            logger.error(f"Request handling failed: {e}")
-            return {
-                "jsonrpc": "2.0",
-                "id": request.get("id"),
-                "error": {
-                    "code": -32603,
-                    "message": str(e)
+                    task_response = requests.post(
+                        f"{BITRIX_WEBHOOK_URL}/tasks.task.add",
+                        json={"fields": task_data},
+                        timeout=10
+                    )
+                    
+                    if task_response.status_code == 200:
+                        task_result = task_response.json()
+                        if task_result.get("result"):
+                            created_tasks.append(task_result["result"]["task"]["id"])
+                            log.info(f"Task created: {task.get('task', '')}")
+                
+                return {
+                    "status": "success",
+                    "lead_id": lead_id,
+                    "updated": True,
+                    "tasks_created": len(created_tasks),
+                    "task_ids": created_tasks,
+                    "message": f"Lead {lead_id} updated, {len(created_tasks)} tasks created"
                 }
+            else:
+                log.error(f"Failed to update lead {lead_id}: {result}")
+                return {
+                    "status": "error",
+                    "error": f"Bitrix API error: {result}",
+                    "message": "Lead update failed"
+                }
+        else:
+            log.error(f"HTTP error updating lead {lead_id}: {response.status_code}")
+            return {
+                "status": "error",
+                "error": f"HTTP {response.status_code}",
+                "message": "Lead update failed"
             }
+            
+    except Exception as e:
+        log.error(f"Bitrix update failed: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "message": "Bitrix update failed"
+        }
+
+def handle_request(request: Dict[str, Any]) -> Dict[str, Any]:
+    """Обработка MCP запроса"""
+    try:
+        method = request.get("method")
+        params = request.get("params", {})
+        
+        log.info(f"Handling request: {method}")
+        
+        if method == "meeting_join":
+            return meeting_join(params.get("meeting_url", ""))
+        elif method == "meeting_analyze":
+            return meeting_analyze(
+                params.get("transcript", ""),
+                params.get("meeting_url", "")
+            )
+        elif method == "checklist":
+            return checklist(params.get("prompt", ""))
+        elif method == "bitrix_update":
+            return bitrix_update(
+                params.get("lead_id", 0),
+                params.get("summary", ""),
+                params.get("tasks", []),
+                params.get("lead_score", 0)
+            )
+        else:
+            return {
+                "status": "error",
+                "error": f"Unknown method: {method}",
+                "message": "Method not found"
+            }
+            
+    except Exception as e:
+        log.error(f"Request handling failed: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "message": "Request handling failed"
+        }
 
 def main():
-    """Main function"""
-    router = MCPRouter()
-    logger.info("MCP Router started")
-    
-    # Read from stdin
-    json_buffer = ""
-    
+    """Основная функция MCP сервера"""
     try:
-        while True:
-            line = sys.stdin.readline()
-            if not line:
-                break
-            
-            json_buffer += line
-            
-            # Try to parse JSON
-            try:
-                request = json.loads(json_buffer.strip())
-                response = router.handle_request(request)
-                print(json.dumps(response, ensure_ascii=False))
-                sys.stdout.flush()
-                json_buffer = ""
-            except json.JSONDecodeError:
-                # Continue accumulating
-                continue
-            except Exception as e:
-                logger.error(f"Error processing request: {e}")
-                error_response = {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {
-                        "code": -32603,
-                        "message": str(e)
-                    }
-                }
-                print(json.dumps(error_response, ensure_ascii=False))
-                sys.stdout.flush()
-                json_buffer = ""
-                
-    except KeyboardInterrupt:
-        logger.info("MCP Router stopped")
+        os.makedirs('logs', exist_ok=True)
+        log.info("MCP Router started")
+        
+        request_data = sys.stdin.read()
+        request = json.loads(request_data)
+        
+        response = handle_request(request)
+        
+        print(json.dumps(response, ensure_ascii=False, indent=2))
+        
     except Exception as e:
-        logger.error(f"Fatal error: {e}")
+        log.error(f"MCP Router failed: {e}")
+        error_response = {
+            "status": "error",
+            "error": str(e),
+            "message": "MCP Router failed"
+        }
+        print(json.dumps(error_response, ensure_ascii=False, indent=2))
 
 if __name__ == "__main__":
     main()

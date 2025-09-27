@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Проверка Telegram бота</title>
+    <meta charset="utf-8">
+</head>
+<body>
+    <h1>🔍 Проверка Telegram бота</h1>
+    
+    <div id="status"></div>
+    
+    <button onclick="checkBot()">Проверить бота</button>
+    <button onclick="checkWebhook()">Проверить webhook</button>
+    <button onclick="sendTestMessage()">Отправить тестовое сообщение</button>
+    
+    <div id="result"></div>
+    
+    <script>
+        const token = "7992998044:AAHUNEIBP9nqIC7fmpHqBKAPcoQM5ltrWuI";
+        
+        async function checkBot() {
+            const statusDiv = document.getElementById('status');
+            const resultDiv = document.getElementById('result');
+            
+            statusDiv.innerHTML = "🔄 Проверяем бота...";
+            
+            try {
+                const response = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+                const data = await response.json();
+                
+                if (data.ok) {
+                    const bot = data.result;
+                    statusDiv.innerHTML = "✅ Бот активен";
+                    resultDiv.innerHTML = `
+                        <h3>Информация о боте:</h3>
+                        <p><strong>Имя:</strong> ${bot.first_name}</p>
+                        <p><strong>Username:</strong> @${bot.username}</p>
+                        <p><strong>ID:</strong> ${bot.id}</p>
+                        <p><strong>Может присоединяться к группам:</strong> ${bot.can_join_groups ? 'Да' : 'Нет'}</p>
+                        <p><strong>Может читать сообщения:</strong> ${bot.can_read_all_group_messages ? 'Да' : 'Нет'}</p>
+                    `;
+                } else {
+                    statusDiv.innerHTML = "❌ Ошибка API";
+                    resultDiv.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                }
+            } catch (error) {
+                statusDiv.innerHTML = "💥 Ошибка сети";
+                resultDiv.innerHTML = `<p>Ошибка: ${error.message}</p>`;
+            }
+        }
+        
+        async function checkWebhook() {
+            const statusDiv = document.getElementById('status');
+            const resultDiv = document.getElementById('result');
+            
+            statusDiv.innerHTML = "🔄 Проверяем webhook...";
+            
+            try {
+                const response = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`);
+                const data = await response.json();
+                
+                if (data.ok) {
+                    const webhook = data.result;
+                    statusDiv.innerHTML = "✅ Webhook информация получена";
+                    resultDiv.innerHTML = `
+                        <h3>Информация о webhook:</h3>
+                        <p><strong>URL:</strong> ${webhook.url || 'Не установлен'}</p>
+                        <p><strong>Ожидает обновлений:</strong> ${webhook.pending_update_count}</p>
+                        <p><strong>Последняя ошибка:</strong> ${webhook.last_error_message || 'Нет'}</p>
+                        <p><strong>Дата последней ошибки:</strong> ${webhook.last_error_date ? new Date(webhook.last_error_date * 1000).toLocaleString() : 'Нет'}</p>
+                    `;
+                } else {
+                    statusDiv.innerHTML = "❌ Ошибка webhook API";
+                    resultDiv.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                }
+            } catch (error) {
+                statusDiv.innerHTML = "💥 Ошибка сети";
+                resultDiv.innerHTML = `<p>Ошибка: ${error.message}</p>`;
+            }
+        }
+        
+        async function sendTestMessage() {
+            const chatId = prompt("Введите ваш Telegram ID (можно узнать у @userinfobot):");
+            if (!chatId) return;
+            
+            const statusDiv = document.getElementById('status');
+            const resultDiv = document.getElementById('result');
+            
+            statusDiv.innerHTML = "🔄 Отправляем тестовое сообщение...";
+            
+            try {
+                const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        chat_id: chatId,
+                        text: "🤖 Тестовое сообщение от бота!\n\nЕсли вы видите это сообщение, значит бот работает корректно."
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.ok) {
+                    statusDiv.innerHTML = "✅ Сообщение отправлено";
+                    resultDiv.innerHTML = `
+                        <h3>Сообщение отправлено:</h3>
+                        <p><strong>ID сообщения:</strong> ${data.result.message_id}</p>
+                        <p><strong>Дата:</strong> ${new Date(data.result.date * 1000).toLocaleString()}</p>
+                    `;
+                } else {
+                    statusDiv.innerHTML = "❌ Ошибка отправки";
+                    resultDiv.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                }
+            } catch (error) {
+                statusDiv.innerHTML = "💥 Ошибка сети";
+                resultDiv.innerHTML = `<p>Ошибка: ${error.message}</p>`;
+            }
+        }
+        
+        // Автоматическая проверка при загрузке
+        window.onload = function() {
+            checkBot();
+        };
+    </script>
+</body>
+</html>

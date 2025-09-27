@@ -1,94 +1,63 @@
 {
-  "prompts": {
-    "meeting_analysis": {
-      "name": "meeting_analysis",
-      "description": "Analyze meeting transcript and generate comprehensive report with actionable insights",
-      "arguments": [
+  "meeting_analysis": {
+    "system_prompt": "Ты - эксперт по анализу деловых встреч. Проанализируй транскрипт встречи и создай структурированный отчет.",
+    "user_prompt": "Проанализируй следующий транскрипт встречи и верни JSON с полями:\n\nТранскрипт: {transcript}\nURL встречи: {meeting_url}\n\nВерни JSON:\n{\n  \"summary\": \"краткое резюме встречи (2-3 предложения)\",\n  \"key_points\": [\"ключевые моменты обсуждения\"],\n  \"decisions\": [\"принятые решения\"],\n  \"action_items\": [\n    {\n      \"task\": \"описание задачи\",\n      \"assignee\": \"ответственный\",\n      \"deadline\": \"срок выполнения\",\n      \"priority\": \"High/Medium/Low\"\n    }\n  ],\n  \"next_steps\": [\"следующие шаги\"],\n  \"lead_score\": 8,\n  \"sentiment\": \"positive/neutral/negative\",\n  \"topics\": [\"основные темы обсуждения\"]\n}",
+    "expected_response": {
+      "summary": "string",
+      "key_points": ["string"],
+      "decisions": ["string"],
+      "action_items": [
         {
-          "name": "transcript",
-          "description": "Full meeting transcript text",
-          "required": true
-        },
-        {
-          "name": "meeting_url",
-          "description": "Original meeting URL",
-          "required": true
-        },
-        {
-          "name": "lead_id",
-          "description": "Lead ID for CRM integration",
-          "required": false
+          "task": "string",
+          "assignee": "string",
+          "deadline": "string",
+          "priority": "High/Medium/Low"
         }
       ],
-      "template": "Analyze this meeting transcript using Gemini AI and provide comprehensive business analysis:\n\nMeeting URL: {{meeting_url}}\nLead ID: {{lead_id}}\nTranscript: {{transcript}}\n\nProvide detailed analysis including:\n1. Meeting summary (2-3 sentences)\n2. Key decisions made\n3. Action items with deadlines and assignees\n4. Lead qualification score (1-10)\n5. Next steps and follow-up\n6. Risk assessment\n7. Opportunities identified\n8. Budget indicators\n9. Decision makers identified\n10. Timeline urgency\n\nReturn ONLY valid JSON format:\n{\n  \"summary\": \"Brief meeting summary\",\n  \"decisions\": [\"Decision 1\", \"Decision 2\"],\n  \"action_items\": [\n    {\n      \"task\": \"Task description\",\n      \"deadline\": \"YYYY-MM-DD\",\n      \"assignee\": \"Name\",\n      \"priority\": \"High/Medium/Low\"\n    }\n  ],\n  \"lead_score\": 8,\n  \"next_steps\": [\"Step 1\", \"Step 2\"],\n  \"risks\": [\"Risk 1\", \"Risk 2\"],\n  \"opportunities\": [\"Opportunity 1\", \"Opportunity 2\"],\n  \"budget_indicators\": [\"Indicator 1\", \"Indicator 2\"],\n  \"decision_makers\": [\"Name 1\", \"Name 2\"],\n  \"timeline_urgency\": \"High/Medium/Low\"\n}"
-    },
-    "task_generation": {
-      "name": "task_generation",
-      "description": "Generate actionable tasks from meeting analysis with clear ownership and deadlines",
-      "arguments": [
+      "next_steps": ["string"],
+      "lead_score": "number",
+      "sentiment": "positive/neutral/negative",
+      "topics": ["string"]
+    }
+  },
+  "checklist_generation": {
+    "system_prompt": "Ты - эксперт по созданию чеклистов задач. Создай структурированный чеклист на основе предоставленного текста.",
+    "user_prompt": "Проанализируй следующий текст и создай чеклист задач в JSON формате:\n\nТекст: {prompt}\n\nВерни JSON:\n{\n  \"checklist\": [\n    {\n      \"task\": \"описание задачи\",\n      \"completed\": false,\n      \"priority\": \"High/Medium/Low\",\n      \"deadline\": \"срок выполнения\"\n    }\n  ],\n  \"summary\": \"краткое резюме чеклиста\",\n  \"total_tasks\": 0,\n  \"completed_tasks\": 0\n}",
+    "expected_response": {
+      "checklist": [
         {
-          "name": "analysis",
-          "description": "Meeting analysis result",
-          "required": true
-        },
-        {
-          "name": "lead_id",
-          "description": "Lead ID for task assignment",
-          "required": true
+          "task": "string",
+          "completed": "boolean",
+          "priority": "High/Medium/Low",
+          "deadline": "string"
         }
       ],
-      "template": "Generate actionable tasks from meeting analysis:\n\nLead ID: {{lead_id}}\nAnalysis: {{analysis}}\n\nCreate specific, time-bound tasks with clear ownership:\n1. Immediate actions (next 24 hours)\n2. Short-term tasks (next week)\n3. Long-term follow-up (next month)\n\nReturn ONLY valid JSON format:\n{\n  \"immediate_tasks\": [\n    {\n      \"task\": \"Task description\",\n      \"deadline\": \"YYYY-MM-DD\",\n      \"assignee\": \"Name\",\n      \"priority\": \"High\"\n    }\n  ],\n  \"short_term_tasks\": [\n    {\n      \"task\": \"Task description\",\n      \"deadline\": \"YYYY-MM-DD\",\n      \"assignee\": \"Name\",\n      \"priority\": \"Medium\"\n    }\n  ],\n  \"long_term_tasks\": [\n    {\n      \"task\": \"Task description\",\n      \"deadline\": \"YYYY-MM-DD\",\n      \"assignee\": \"Name\",\n      \"priority\": \"Low\"\n    }\n  ]\n}"
-    },
-    "lead_qualification": {
-      "name": "lead_qualification",
-      "description": "Qualify lead based on meeting content and BANT criteria",
-      "arguments": [
-        {
-          "name": "transcript",
-          "description": "Meeting transcript",
-          "required": true
-        },
-        {
-          "name": "lead_info",
-          "description": "Existing lead information",
-          "required": false
-        }
-      ],
-      "template": "Qualify this lead based on meeting transcript using BANT criteria:\n\nLead Info: {{lead_info}}\nTranscript: {{transcript}}\n\nEvaluate:\n1. Budget availability (1-10)\n2. Decision-making authority (1-10)\n3. Timeline urgency (1-10)\n4. Fit with solution (1-10)\n5. Competition presence\n6. Overall qualification score\n7. Qualification status\n8. Recommendations\n\nReturn ONLY valid JSON format:\n{\n  \"budget_score\": 8,\n  \"authority_score\": 7,\n  \"timeline_score\": 9,\n  \"fit_score\": 8,\n  \"competition_present\": true,\n  \"overall_score\": 8,\n  \"qualification_status\": \"Hot/Warm/Cold\",\n  \"recommendations\": [\"Recommendation 1\", \"Recommendation 2\"]\n}"
-    },
-    "follow_up_email": {
-      "name": "follow_up_email",
-      "description": "Generate professional follow-up email based on meeting analysis",
-      "arguments": [
-        {
-          "name": "analysis",
-          "description": "Meeting analysis",
-          "required": true
-        },
-        {
-          "name": "lead_name",
-          "description": "Lead contact name",
-          "required": true
-        }
-      ],
-      "template": "Generate professional follow-up email:\n\nLead Name: {{lead_name}}\nMeeting Analysis: {{analysis}}\n\nCreate email with:\n1. Thank you for meeting\n2. Key points discussed\n3. Next steps\n4. Attachments/links\n5. Call to action\n\nReturn email content in markdown format."
-    },
-    "meeting_checklist": {
-      "name": "meeting_checklist",
-      "description": "Generate comprehensive meeting preparation and follow-up checklist with real business value",
-      "arguments": [
-        {
-          "name": "meeting_type",
-          "description": "Type of meeting (sales, demo, follow-up, discovery, negotiation)",
-          "required": true
-        },
-        {
-          "name": "lead_info",
-          "description": "Lead information including company, role, pain points",
-          "required": false
-        }
-      ],
-      "template": "Generate comprehensive meeting checklist for {{meeting_type}} meeting:\n\nLead Info: {{lead_info}}\n\nCreate detailed, actionable checklist with:\n1. Pre-meeting preparation (research, materials, agenda)\n2. During meeting actions (questions, documentation, qualification)\n3. Post-meeting follow-up (emails, CRM updates, next steps)\n4. Documentation requirements (notes, recordings, decisions)\n5. Next steps and deadlines (proposals, demos, contracts)\n\nFocus on sales effectiveness and lead qualification.\n\nReturn ONLY valid JSON format:\n{\n  \"pre_meeting\": [\n    \"Research company background and recent news\",\n    \"Prepare personalized demo based on pain points\",\n    \"Set up meeting recording and note-taking tools\",\n    \"Review lead's previous interactions and history\",\n    \"Prepare qualifying questions and objection handling\"\n  ],\n  \"during_meeting\": [\n    \"Introduce yourself and establish rapport\",\n    \"Ask discovery questions about current challenges\",\n    \"Present relevant solution features and benefits\",\n    \"Identify decision makers and budget authority\",\n    \"Document key pain points and requirements\",\n    \"Confirm next steps and timeline\"\n  ],\n  \"post_meeting\": [\n    \"Send follow-up email within 2 hours\",\n    \"Update CRM with meeting notes and outcomes\",\n    \"Schedule next meeting or demo if qualified\",\n    \"Share relevant case studies or materials\",\n    \"Follow up on any outstanding questions\"\n  ],\n  \"documentation\": [\n    \"Meeting notes with key decisions\",\n    \"Action items with owners and deadlines\",\n    \"Lead qualification score and status\",\n    \"Next meeting agenda and objectives\",\n    \"Competitive landscape and positioning\"\n  ],\n  \"next_steps\": [\n    \"Send proposal within 24 hours\",\n    \"Schedule technical demo for next week\",\n    \"Connect with decision maker directly\",\n    \"Prepare ROI analysis and business case\",\n    \"Follow up on contract terms and pricing\"\n  ]\n}"
+      "summary": "string",
+      "total_tasks": "number",
+      "completed_tasks": "number"
+    }
+  },
+  "bitrix_update": {
+    "system_prompt": "Ты - эксперт по работе с CRM Bitrix24. Обнови лид и создай задачи на основе анализа встречи.",
+    "user_prompt": "Обнови лид {lead_id} в Bitrix24:\n- Заголовок: Встреча проведена - Оценка: {lead_score}/10\n- Комментарий: {summary}\n- Оценка лида: {lead_score}\n\nСоздай задачи:\n{tasks}",
+    "expected_response": {
+      "status": "success/error",
+      "lead_id": "number",
+      "updated": "boolean",
+      "tasks_created": "number",
+      "task_ids": ["number"],
+      "message": "string"
+    }
+  },
+  "meeting_join": {
+    "system_prompt": "Ты - эксперт по подключению к онлайн-встречам. Подключись к встрече и верни информацию о платформе.",
+    "user_prompt": "Подключись к встрече: {meeting_url}\n\nОпредели платформу (Zoom, Google Meet, Microsoft Teams) и верни информацию о подключении.",
+    "expected_response": {
+      "status": "success/error",
+      "platform": "string",
+      "url": "string",
+      "joined_at": "string",
+      "message": "string"
     }
   }
 }

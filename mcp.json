@@ -1,79 +1,39 @@
 {
   "mcpServers": {
-    "meeting-bot-assistant": {
-      "command": "python3",
+    "meeting-bot": {
+      "command": "python",
       "args": ["router.py"],
       "env": {
-        "TELEGRAM_BOT_TOKEN": "7992998044:AAHUNEIBP9nqIC7fmpHqBKAPcoQM5ltrWuI",
-        "GEMINI_KEY": "AIzaSyDQR42zm4pcRMkY9KzKvEmXm7hyR8UzxHI",
-        "BITRIX_TOKEN": "https://skill-to-lead.bitrix24.ru/rest/1403/cmf3ncejqif8ny31/",
-        "ADMIN_CHAT_ID": "7537953397",
-        "LOG_LEVEL": "info",
-        "PYTHONPATH": ".",
-        "PYTHONUNBUFFERED": "1",
-        "PYTHONIOENCODING": "utf-8",
-        "TZ": "Europe/Moscow"
+        "GEMINI_API_KEY": "AIzaSyDQR42zm4pcRMkY9KzKvEmXm7hyR8UzxHI",
+        "BITRIX_WEBHOOK_URL": "https://skill-to-lead.bitrix24.ru/rest/1403/cmf3ncejqif8ny31/",
+        "TELEGRAM_BOT_TOKEN": "7992998044:AAHUNEIBP9nqIC7fmpHqBKAPcoQM5ltrWuI"
       },
-      "cwd": "C:\\Users\\PC\\Downloads\\гитхаб\\b24",
-      "restartOnFailure": true,
-      "timeoutMs": 120000,
-      "maxRestarts": 3,
-      "description": "Meeting Bot Assistant - Real MCP router with Gemini and Bitrix integration",
-      "capabilities": {
-        "tools": true,
-        "resources": true,
-        "prompts": true
-      }
-    },
-    "meeting-bot-dev": {
-      "command": "python3",
-      "args": ["router.py"],
-      "env": {
-        "TELEGRAM_BOT_TOKEN": "7992998044:AAHUNEIBP9nqIC7fmpHqBKAPcoQM5ltrWuI",
-        "GEMINI_KEY": "AIzaSyDQR42zm4pcRMkY9KzKvEmXm7hyR8UzxHI",
-        "BITRIX_TOKEN": "https://skill-to-lead.bitrix24.ru/rest/1403/cmf3ncejqif8ny31/",
-        "ADMIN_CHAT_ID": "7537953397",
-        "LOG_LEVEL": "debug",
-        "PYTHONPATH": ".",
-        "PYTHONUNBUFFERED": "1",
-        "PYTHONIOENCODING": "utf-8",
-        "TZ": "Europe/Moscow"
-      },
-      "cwd": "C:\\Users\\PC\\Downloads\\гитхаб\\b24",
-      "restartOnFailure": true,
-      "timeoutMs": 60000,
-      "maxRestarts": 5,
-      "description": "Meeting Bot Assistant - Development environment with debug logging",
-      "capabilities": {
-        "tools": true,
-        "resources": true,
-        "prompts": true
-      }
-    },
-    "meeting-bot-production": {
-      "command": "python3",
-      "args": ["router.py"],
-      "env": {
-        "TELEGRAM_BOT_TOKEN": "7992998044:AAHUNEIBP9nqIC7fmpHqBKAPcoQM5ltrWuI",
-        "GEMINI_KEY": "AIzaSyDQR42zm4pcRMkY9KzKvEmXm7hyR8UzxHI",
-        "BITRIX_TOKEN": "https://skill-to-lead.bitrix24.ru/rest/1403/cmf3ncejqif8ny31/",
-        "ADMIN_CHAT_ID": "7537953397",
-        "LOG_LEVEL": "warning",
-        "PYTHONPATH": ".",
-        "PYTHONUNBUFFERED": "1",
-        "PYTHONIOENCODING": "utf-8",
-        "TZ": "Europe/Moscow"
-      },
-      "cwd": "C:\\Users\\PC\\Downloads\\гитхаб\\b24",
-      "restartOnFailure": true,
-      "timeoutMs": 180000,
-      "maxRestarts": 2,
-      "description": "Meeting Bot Assistant - Production environment with optimized settings",
-      "capabilities": {
-        "tools": true,
-        "resources": true,
-        "prompts": true
-      }
+      "cwd": "/root/b24",
+      "timeout": 30000
     }
+  },
+  "tools": [
+    {
+      "name": "meeting_join",
+      "description": "Подключение к онлайн-встрече"
+    },
+    {
+      "name": "meeting_analyze", 
+      "description": "Анализ транскрипта встречи через Gemini AI"
+    },
+    {
+      "name": "checklist",
+      "description": "Создание чеклиста задач через Gemini AI"
+    },
+    {
+      "name": "bitrix_update",
+      "description": "Обновление лида и создание задач в Bitrix24"
+    }
+  ],
+  "logging": {
+    "level": "INFO",
+    "file": "logs/router.log",
+    "stderr": true,
+    "stdout": false
   }
 }

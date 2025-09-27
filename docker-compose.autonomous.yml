@@ -1,10 +1,12 @@
 version: '3.8'
 
 services:
-  autonomous-bot:
-    build: .
+  autonomous-meeting-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.autonomous
     container_name: autonomous-meeting-bot
-    restart: unless-stopped
+    restart: always
     environment:
       - TELEGRAM_BOT_TOKEN=7992998044:AAHUNEIBP9nqIC7fmpHqBKAPcoQM5ltrWuI
       - GEMINI_API_KEY=AIzaSyDQR42zm4pcRMkY9KzKvEmXm7hyR8UzxHI
@@ -13,6 +15,12 @@ services:
       - ./logs:/app/logs
     networks:
       - bot-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('https://api.telegram.org/bot7992998044:AAHUNEIBP9nqIC7fmpHqBKAPcoQM5ltrWuI/getMe', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
 networks:
   bot-network:

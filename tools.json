@@ -1,256 +1,115 @@
 {
-  "tools": {
-    "meeting_join": {
+  "tools": [
+    {
       "name": "meeting_join",
-      "description": "Join a meeting and start recording audio/video with real meeting access",
-      "inputSchema": {
+      "description": "Подключение к онлайн-встрече",
+      "parameters": {
         "type": "object",
         "properties": {
           "meeting_url": {
             "type": "string",
-            "description": "Meeting URL to join (Zoom, Google Meet, Teams, etc.)"
-          },
-          "platform": {
-            "type": "string",
-            "enum": ["zoom", "meet", "teams", "telemost"],
-            "description": "Meeting platform type"
-          },
-          "auto_join": {
-            "type": "boolean",
-            "description": "Automatically join without waiting for user confirmation",
-            "default": true
+            "description": "URL встречи для подключения"
           }
         },
         "required": ["meeting_url"]
       },
       "implementation": {
-        "type": "browser_automation",
-        "browser": "default",
-        "headless": false,
-        "timeout": 120,
-        "actions": [
-          "open_meeting_url",
-          "log_join_attempt",
-          "send_telegram_notification",
-          "record_meeting_status"
-        ],
-        "logging": {
-          "level": "info",
-          "file": "logs/meeting_join.log"
-        }
+        "function": "meeting_join",
+        "description": "Реально подключается к встрече, определяет платформу и логирует подключение"
       }
     },
-    "meeting_analyze": {
+    {
       "name": "meeting_analyze",
-      "description": "Analyze meeting transcript using Gemini AI and generate actionable insights",
-      "inputSchema": {
+      "description": "Анализ транскрипта встречи через Gemini AI",
+      "parameters": {
         "type": "object",
         "properties": {
           "transcript": {
             "type": "string",
-            "description": "Meeting transcript text"
+            "description": "Транскрипт встречи для анализа"
           },
           "meeting_url": {
             "type": "string",
-            "description": "Original meeting URL"
-          },
-          "lead_id": {
-            "type": "string",
-            "description": "Lead ID for CRM integration"
-          },
-          "analysis_type": {
-            "type": "string",
-            "enum": ["full", "summary", "tasks_only"],
-            "description": "Type of analysis to perform",
-            "default": "full"
+            "description": "URL встречи (опционально)"
           }
         },
-        "required": ["transcript", "meeting_url"]
+        "required": ["transcript"]
       },
       "implementation": {
-        "type": "gemini_ai",
-        "model": "gemini-1.5-flash",
-        "prompt_template": "meeting_analysis",
-        "output_format": "json",
-        "max_tokens": 4000,
-        "api_key_env": "GEMINI_KEY",
-        "logging": {
-          "level": "info",
-          "file": "logs/gemini_analysis.log"
-        }
+        "function": "meeting_analyze",
+        "description": "Отправляет транскрипт в Gemini AI и возвращает структурированный анализ с задачами и оценкой лида"
       }
     },
-    "bitrix_update": {
+    {
+      "name": "checklist",
+      "description": "Создание чеклиста задач через Gemini AI",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "Текст для создания чеклиста"
+          }
+        },
+        "required": ["prompt"]
+      },
+      "implementation": {
+        "function": "checklist",
+        "description": "Анализирует текст через Gemini AI и создает структурированный чеклист задач"
+      }
+    },
+    {
       "name": "bitrix_update",
-      "description": "Update Bitrix24 CRM with meeting results and create tasks",
-      "inputSchema": {
+      "description": "Обновление лида и создание задач в Bitrix24",
+      "parameters": {
         "type": "object",
         "properties": {
           "lead_id": {
-            "type": "string",
-            "description": "Lead ID to update"
+            "type": "integer",
+            "description": "ID лида для обновления"
           },
           "summary": {
             "type": "string",
-            "description": "Meeting summary"
+            "description": "Резюме встречи"
           },
           "tasks": {
             "type": "array",
+            "description": "Список задач для создания",
             "items": {
               "type": "object",
               "properties": {
                 "task": {"type": "string"},
-                "deadline": {"type": "string"},
                 "assignee": {"type": "string"},
+                "deadline": {"type": "string"},
                 "priority": {"type": "string"}
               }
-            },
-            "description": "Generated tasks from meeting"
+            }
           },
-          "status": {
-            "type": "string",
-            "enum": ["NEW", "IN_PROCESS", "MEETING_COMPLETED", "QUALIFIED", "UNQUALIFIED"],
-            "description": "Lead status to set",
-            "default": "MEETING_COMPLETED"
-          },
-          "comments": {
-            "type": "string",
-            "description": "Additional comments for lead"
-          }
-        },
-        "required": ["lead_id", "summary"]
-      },
-      "implementation": {
-        "type": "bitrix_api",
-        "endpoints": {
-          "update_lead": "crm.lead.update",
-          "create_task": "tasks.task.add",
-          "add_comment": "crm.lead.comment.add"
-        },
-        "timeout": 30,
-        "api_key_env": "BITRIX_TOKEN",
-        "logging": {
-          "level": "info",
-          "file": "logs/bitrix_update.log"
-        }
-      }
-    },
-    "transcript_processing": {
-      "name": "transcript_processing",
-      "description": "Process audio recording and convert to text transcript using Whisper",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "audio_file": {
-            "type": "string",
-            "description": "Path to audio file"
-          },
-          "language": {
-            "type": "string",
-            "description": "Audio language code",
-            "default": "ru"
-          },
-          "format": {
-            "type": "string",
-            "enum": ["whisper", "google_stt", "azure_stt"],
-            "description": "Speech-to-text service",
-            "default": "whisper"
-          }
-        },
-        "required": ["audio_file"]
-      },
-      "implementation": {
-        "type": "speech_to_text",
-        "service": "whisper",
-        "model": "whisper-1",
-        "language": "ru",
-        "format": "json",
-        "api_key_env": "OPENAI_API_KEY",
-        "logging": {
-          "level": "info",
-          "file": "logs/transcript_processing.log"
-        }
-      }
-    },
-    "meeting_recording": {
-      "name": "meeting_recording",
-      "description": "Record meeting audio and video with real recording capabilities",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "duration": {
+          "lead_score": {
             "type": "integer",
-            "description": "Recording duration in minutes",
-            "default": 60
-          },
-          "audio_only": {
-            "type": "boolean",
-            "description": "Record only audio",
-            "default": false
-          },
-          "quality": {
-            "type": "string",
-            "enum": ["low", "medium", "high"],
-            "description": "Recording quality",
-            "default": "medium"
+            "description": "Оценка лида (1-10)"
           }
-        }
+        },
+        "required": ["lead_id", "summary", "tasks", "lead_score"]
       },
       "implementation": {
-        "type": "audio_recording",
-        "format": "wav",
-        "sample_rate": 44100,
-        "channels": 2,
-        "logging": {
-          "level": "info",
-          "file": "logs/meeting_recording.log"
-        }
+        "function": "bitrix_update",
+        "description": "Реально обновляет лид в Bitrix24 и создает задачи через API"
       }
+    }
+  ],
+  "error_handling": {
+    "gemini_api_error": {
+      "description": "Ошибка API Gemini",
+      "fallback": "Возвращает error с кодом и трассировкой"
     },
-    "checklist_generation": {
-      "name": "checklist_generation",
-      "description": "Generate comprehensive meeting checklist using Gemini AI with real business value",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "meeting_type": {
-            "type": "string",
-            "enum": ["sales", "demo", "follow-up", "discovery", "negotiation", "presentation"],
-            "description": "Type of meeting for checklist generation"
-          },
-          "lead_info": {
-            "type": "string",
-            "description": "Lead information including company, role, pain points"
-          },
-          "industry": {
-            "type": "string",
-            "description": "Industry sector for customized checklist"
-          },
-          "meeting_duration": {
-            "type": "integer",
-            "description": "Expected meeting duration in minutes",
-            "default": 60
-          }
-        },
-        "required": ["meeting_type"]
-      },
-      "implementation": {
-        "type": "gemini_ai",
-        "model": "gemini-1.5-flash",
-        "prompt_template": "meeting_checklist",
-        "output_format": "json",
-        "max_tokens": 3000,
-        "api_key_env": "GEMINI_KEY",
-        "temperature": 0.7,
-        "logging": {
-          "level": "info",
-          "file": "logs/checklist_generation.log"
-        },
-        "validation": {
-          "required_fields": ["pre_meeting", "during_meeting", "post_meeting", "documentation", "next_steps"],
-          "max_items_per_section": 10
-        }
-      }
+    "bitrix_api_error": {
+      "description": "Ошибка API Bitrix24",
+      "fallback": "Возвращает error с кодом HTTP и деталями"
+    },
+    "json_parse_error": {
+      "description": "Ошибка парсинга JSON ответа",
+      "fallback": "Возвращает error с исходным текстом ответа"
     }
   }
 }

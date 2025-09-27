@@ -12,7 +12,7 @@ log = logging.getLogger("gemini_client")
 # Настройка Gemini API
 if config.GEMINI_API_KEY:
     genai.configure(api_key=config.GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel('gemini-1.5-flash')
 else:
     log.warning("GEMINI_API_KEY не настроен, Gemini функции недоступны")
     model = None
