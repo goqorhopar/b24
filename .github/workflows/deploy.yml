@@ -25,11 +25,9 @@ jobs:
           # Переходим в рабочую директорию
           cd /opt/meeting-bot || exit 1
           
-          # Останавливаем бота
+          # Останавливаем бот
           echo "⏸️  Останавливаю бота..."
           systemctl stop meeting-bot.service 2>/dev/null || true
-          pkill -f meeting-bot.py 2>/dev/null || true
-          sleep 3
           
           # Сохраняем текущий .env файл
           if [ -f .env ]; then
@@ -90,7 +88,7 @@ jobs:
           systemctl daemon-reload
           
           # Запускаем бота
-          echo "🚀 Запускаю бота v2.2..."
+          echo "🚀 Запускаю бота..."
           systemctl start meeting-bot.service
           
           # Ждем запуска
