@@ -1,0 +1,28 @@
+{
+  "sessionStorage": {
+    "clear": {},
+    "getItem": {},
+    "key": {},
+    "length": 0,
+    "removeItem": {},
+    "setItem": {}
+  },
+  "localStorage": {
+    "_ym784657:0_reqNum": "11",
+    "_ym784657_lastHit": "1759258695673",
+    "_ym784657_lsid": "1326140757455",
+    "_ym85141069:0_reqNum": "12",
+    "_ym85141069_lastHit": "1759258702799",
+    "_ym85141069_lsid": "1745635894109",
+    "_ym_retryReqs": "{}",
+    "_ym_synced": "{}",
+    "_ym_uid": "\"1759258543785027083\"",
+    "clear": {},
+    "getItem": {},
+    "key": {},
+    "length": 9,
+    "removeItem": {},
+    "setItem": {}
+  },
+  "timestamp": 1759258707.9401202
+}

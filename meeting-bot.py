@@ -41,6 +41,9 @@ from github import Github
 from dotenv import load_dotenv
 load_dotenv()
 
+# Импорт модуля авторизации
+from load_auth_data import get_auth_loader
+
 # Конфигурация
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
@@ -74,6 +77,7 @@ class MeetingBot:
         self.start_time = None
         self.monitoring_task = None
         self.meeting_active = True
+        self.auth_loader = get_auth_loader()
         
         # Инициализация GitHub
         if GITHUB_TOKEN:
@@ -141,6 +145,16 @@ class MeetingBot:
             self.driver = webdriver.Chrome(options=options)
             self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             logger.info("Chrome драйвер инициализирован")
+            
+            # Применяем сохраненные данные авторизации
+            auth_status = self.auth_loader.get_auth_status()
+            logger.info(f"Статус авторизации: {auth_status}")
+            
+            if self.auth_loader.setup_authenticated_driver(self.driver):
+                logger.info("✅ Драйвер настроен с авторизацией")
+            else:
+                logger.warning("⚠️ Авторизация не применена - возможны проблемы с закрытыми встречами")
+                
         except Exception as e:
             logger.error(f"Ошибка инициализации Chrome: {e}")
             raise

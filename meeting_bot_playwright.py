@@ -1,6 +1,7 @@
 from playwright.sync_api import sync_playwright
 import json
 import os
+from load_auth_data import get_auth_loader
 
 COOKIES_PATH = "cookies.json"
 
@@ -30,6 +31,7 @@ class MeetingBotPlaywright:
         self.browser = None
         self.context = None
         self.page = None
+        self.auth_loader = get_auth_loader()
 
     def load_cookies(self):
         if os.path.exists(COOKIES_PATH):
@@ -62,11 +64,20 @@ class MeetingBotPlaywright:
     def join_meeting(self):
         with sync_playwright() as p:
             self.browser = p.chromium.launch(headless=False)
+            
+            # Проверяем статус авторизации
+            auth_status = self.auth_loader.get_auth_status()
+            print(f"Статус авторизации: {auth_status}")
+            
+            # Загружаем cookies для Playwright
             cookies_file = self.load_cookies()
             if cookies_file:
                 self.context = self.browser.new_context(storage_state=cookies_file)
+                print("✅ Используются сохраненные cookies для авторизации")
             else:
                 self.context = self.browser.new_context()
+                print("⚠️ Cookies не найдены - возможны проблемы с закрытыми встречами")
+            
             self.page = self.context.new_page()
             self.page.goto(self.meeting_url)
             # Пример для Google Meet

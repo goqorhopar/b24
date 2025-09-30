@@ -1,0 +1,19 @@
+{
+  "sessionStorage": {
+    "clear": {},
+    "getItem": {},
+    "key": {},
+    "length": 0,
+    "removeItem": {},
+    "setItem": {}
+  },
+  "localStorage": {
+    "clear": {},
+    "getItem": {},
+    "key": {},
+    "length": 0,
+    "removeItem": {},
+    "setItem": {}
+  },
+  "timestamp": 1759258757.225802
+}
