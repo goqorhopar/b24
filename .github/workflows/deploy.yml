@@ -2,7 +2,7 @@ name: Deploy Meeting Bot to Server
 
 on:
   push:
-    branches: [ main-fixed ]
+    branches: [ main-deploy ]
   workflow_dispatch:
 
 jobs:
@@ -30,7 +30,7 @@ jobs:
           
           # Обновляем код
           git fetch origin
-          git reset --hard origin/main-fixed
+          git reset --hard origin/main-deploy
           
           # Обновляем зависимости
           source venv/bin/activate
@@ -50,7 +50,7 @@ jobs:
           # GitHub
           GITHUB_REPO=${{ secrets.GITHUB_REPO }}
           GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
-          GITHUB_BRANCH=main-fixed
+          GITHUB_BRANCH=main-deploy
           
           # Deploy
           DEPLOY_LOCAL_PATH=/opt/meeting-bot
