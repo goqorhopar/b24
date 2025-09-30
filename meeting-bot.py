@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Meeting Bot - Исправленная версия для участия во встречах
+Meeting Bot - Улучшенная версия для работы на VPS
+Поддержка: Google Meet, Zoom, Яндекс Телемост, Контур.Толк
 """
 
 import os
@@ -12,6 +13,9 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 import subprocess
 import tempfile
+import re
+import time
+from pathlib import Path
 
 # Selenium для автоматизации браузера
 from selenium import webdriver
@@ -20,24 +24,33 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 # Telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
-# Аудио обработка
-import pyaudio
-import wave
-import speech_recognition as sr
-from pydub import AudioSegment
+# Whisper для транскрипции
+from faster_whisper import WhisperModel
 
 # GitHub
 from github import Github
 
+# Загрузка переменных окружения
+from dotenv import load_dotenv
+load_dotenv()
+
 # Конфигурация
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN', '')
 GITHUB_REPO = os.getenv('GITHUB_REPO', 'goqorhopar/b24')
+WHISPER_MODEL = os.getenv('WHISPER_MODEL', 'medium')
+RECORD_DIR = os.getenv('RECORD_DIR', '/tmp/recordings')
+MEETING_TIMEOUT_MIN = int(os.getenv('MEETING_TIMEOUT_MIN', '180'))  # 3 часа по умолчанию
+
+# Создаем директорию для записей
+Path(RECORD_DIR).mkdir(parents=True, exist_ok=True)
 
 # Настройка логирования
 logging.basicConfig(
@@ -54,186 +67,229 @@ class MeetingBot:
         self.recording = False
         self.audio_file = None
         self.transcript = []
+        self.recording_process = None
+        self.meeting_url = None
+        self.start_time = None
+        
+        # Инициализация GitHub
         if GITHUB_TOKEN:
-            self.github = Github(GITHUB_TOKEN)
-            self.repo = self.github.get_repo(GITHUB_REPO)
+            try:
+                self.github = Github(GITHUB_TOKEN)
+                self.repo = self.github.get_repo(GITHUB_REPO)
+                logger.info("GitHub репозиторий подключен")
+            except Exception as e:
+                logger.error(f"Ошибка подключения к GitHub: {e}")
+                self.github = None
+                self.repo = None
         else:
             self.github = None
             self.repo = None
+            logger.warning("GitHub токен не настроен")
+        
+        # Инициализация Whisper модели
+        try:
+            logger.info(f"Загрузка Whisper модели: {WHISPER_MODEL}")
+            self.whisper_model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+            logger.info("Whisper модель загружена")
+        except Exception as e:
+            logger.error(f"Ошибка загрузки Whisper: {e}")
+            self.whisper_model = None
         
     def setup_driver(self, headless=True):
-        """Настройка Chrome драйвера"""
+        """Настройка Chrome драйвера для VPS"""
         options = Options()
         
-        # Важные опции для работы с аудио/видео
+        # Критичные настройки для headless режима
+        if headless:
+            options.add_argument('--headless=new')
+            options.add_argument('--no-sandbox')
+            options.add_argument('--disable-dev-shm-usage')
+            options.add_argument('--disable-gpu')
+            options.add_argument('--disable-software-rasterizer')
+            options.add_argument('--disable-extensions')
+        
+        # Настройки для медиа
         options.add_argument('--use-fake-ui-for-media-stream')
         options.add_argument('--use-fake-device-for-media-stream')
         options.add_argument('--autoplay-policy=no-user-gesture-required')
+        options.add_argument('--disable-blink-features=AutomationControlled')
         
-        if headless:
-            options.add_argument('--headless=new')
-            options.add_argument('--disable-gpu')
-            options.add_argument('--no-sandbox')
-            options.add_argument('--disable-dev-shm-usage')
+        # Размер окна
+        options.add_argument('--window-size=1920,1080')
+        options.add_argument('--start-maximized')
+        
+        # User agent
+        options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         
         # Разрешения для микрофона и камеры
         prefs = {
             "profile.default_content_setting_values.media_stream_mic": 1,
             "profile.default_content_setting_values.media_stream_camera": 1,
-            "profile.default_content_setting_values.notifications": 2
+            "profile.default_content_setting_values.notifications": 2,
+            "profile.default_content_setting_values.geolocation": 2,
         }
         options.add_experimental_option("prefs", prefs)
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
         
-        # Путь к ChromeDriver (автоматический поиск)
+        # Инициализация драйвера
         try:
-            # Пытаемся найти chromedriver в PATH
             self.driver = webdriver.Chrome(options=options)
+            self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            logger.info("Chrome драйвер инициализирован")
         except Exception as e:
             logger.error(f"Ошибка инициализации Chrome: {e}")
-            # Fallback для Linux сервера
-            try:
-                service = Service('/usr/bin/chromedriver')
-                self.driver = webdriver.Chrome(service=service, options=options)
-            except Exception as e2:
-                logger.error(f"Ошибка инициализации Chrome с сервисом: {e2}")
-                raise e2
+            raise
         
+    def detect_meeting_type(self, url: str) -> str:
+        """Определить тип встречи по URL"""
+        url_lower = url.lower()
+        if 'meet.google.com' in url_lower:
+            return 'google_meet'
+        elif 'zoom.us' in url_lower or 'zoom.com' in url_lower:
+            return 'zoom'
+        elif 'telemost.yandex' in url_lower:
+            return 'yandex'
+        elif 'talk.contour.ru' in url_lower or 'contour.ru' in url_lower:
+            return 'contour'
+        elif 'teams.microsoft.com' in url_lower:
+            return 'teams'
+        else:
+            return 'unknown'
+    
     def join_google_meet(self, meeting_url: str, name: str = "Meeting Bot"):
-        """Присоединиться к Google Meet"""
+        """Присоединиться к Google Meet с улучшенной логикой"""
         try:
+            logger.info(f"Открываем Google Meet: {meeting_url}")
             self.driver.get(meeting_url)
+            self.meeting_url = meeting_url
             
             # Ждем загрузки страницы
-            WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.TAG_NAME, "body"))
-            )
+            time.sleep(5)
             
-            # Отключаем камеру и микрофон
-            try:
-                # Современные селекторы Google Meet
-                camera_selectors = [
-                    "[data-is-muted='false'][aria-label*='camera']",
-                    "[aria-label*='Turn off camera']",
-                    "[aria-label*='Turn on camera']",
-                    "button[aria-label*='camera']",
-                    "[jsname='BOHaEe']"  # Кнопка камеры
-                ]
-                
-                for selector in camera_selectors:
-                    try:
-                        camera_btn = WebDriverWait(self.driver, 2).until(
-                            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                        )
-                        camera_btn.click()
-                        logger.info("Камера отключена")
-                        break
-                    except:
-                        continue
-                        
-            except Exception as e:
-                logger.warning(f"Не удалось отключить камеру: {e}")
-                
-            try:
-                # Селекторы для микрофона
-                mic_selectors = [
-                    "[data-is-muted='false'][aria-label*='microphone']",
-                    "[aria-label*='Turn off microphone']",
-                    "[aria-label*='Turn on microphone']",
-                    "button[aria-label*='microphone']",
-                    "[jsname='BOHaEe']"  # Кнопка микрофона
-                ]
-                
-                for selector in mic_selectors:
-                    try:
-                        mic_btn = WebDriverWait(self.driver, 2).until(
-                            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                        )
-                        mic_btn.click()
-                        logger.info("Микрофон отключен")
-                        break
-                    except:
-                        continue
-                        
-            except Exception as e:
-                logger.warning(f"Не удалось отключить микрофон: {e}")
+            # Проверяем, не требуется ли вход в аккаунт
+            if "accounts.google.com" in self.driver.current_url:
+                logger.warning("Требуется вход в Google аккаунт - встреча может быть закрытой")
+                return False
             
-            # Вводим имя
-            try:
-                name_selectors = [
-                    "input[type='text']",
-                    "input[placeholder*='name']",
-                    "input[aria-label*='name']",
-                    "[data-promo-anchor-id='join-form-name-input']"
-                ]
-                
-                name_input = None
-                for selector in name_selectors:
-                    try:
-                        name_input = WebDriverWait(self.driver, 3).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, selector))
-                        )
+            # Отключаем камеру (новые селекторы 2024-2025)
+            camera_disabled = False
+            camera_selectors = [
+                "button[aria-label*='camera' i][data-is-muted='false']",
+                "button[aria-label*='Turn off camera' i]",
+                "div[jscontroller][jsaction*='camera'] button",
+                "button[jsname='BOHaEe']",
+            ]
+            
+            for selector in camera_selectors:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    for el in elements:
+                        aria_label = el.get_attribute('aria-label') or ''
+                        if 'camera' in aria_label.lower():
+                            el.click()
+                            logger.info("Камера отключена")
+                            camera_disabled = True
+                            time.sleep(0.5)
+                            break
+                    if camera_disabled:
                         break
-                    except:
-                        continue
-                
-                if name_input:
-                    name_input.clear()
-                    name_input.send_keys(name)
-                    logger.info(f"Введено имя: {name}")
-                else:
-                    logger.warning("Не удалось найти поле для ввода имени")
-                    
+                except Exception as e:
+                    logger.debug(f"Попытка отключить камеру через {selector}: {e}")
+            
+            # Отключаем микрофон
+            mic_disabled = False
+            mic_selectors = [
+                "button[aria-label*='microphone' i][data-is-muted='false']",
+                "button[aria-label*='Turn off microphone' i]",
+                "div[jscontroller][jsaction*='microphone'] button",
+            ]
+            
+            for selector in mic_selectors:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    for el in elements:
+                        aria_label = el.get_attribute('aria-label') or ''
+                        if 'microphone' in aria_label.lower() or 'mic' in aria_label.lower():
+                            el.click()
+                            logger.info("Микрофон отключен")
+                            mic_disabled = True
+                            time.sleep(0.5)
+                            break
+                    if mic_disabled:
+                        break
+                except Exception as e:
+                    logger.debug(f"Попытка отключить микрофон через {selector}: {e}")
+            
+            # Ищем поле ввода имени (если есть)
+            try:
+                name_inputs = self.driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
+                for inp in name_inputs:
+                    placeholder = (inp.get_attribute('placeholder') or '').lower()
+                    aria_label = (inp.get_attribute('aria-label') or '').lower()
+                    if 'name' in placeholder or 'имя' in placeholder or 'name' in aria_label:
+                        inp.clear()
+                        inp.send_keys(name)
+                        logger.info(f"Введено имя: {name}")
+                        time.sleep(0.5)
+                        break
             except Exception as e:
-                logger.warning(f"Не удалось ввести имя: {e}")
+                logger.debug(f"Не удалось ввести имя: {e}")
             
             # Нажимаем кнопку присоединения
-            try:
-                join_selectors = [
-                    "button[jsname='Qx7uuf']",  # Кнопка "Join now"
-                    "button[aria-label*='Join now']",
-                    "button[aria-label*='Join']",
-                    "button:contains('Join')",
-                    "button:contains('Присоединиться')"
-                ]
-                
-                join_clicked = False
-                for selector in join_selectors:
-                    try:
-                        if ":contains" in selector:
-                            # Используем XPath для текстового поиска
-                            xpath = f"//button[contains(text(), '{selector.split(':contains(')[1].rstrip(')')}')]"
-                            join_btn = WebDriverWait(self.driver, 3).until(
-                                EC.element_to_be_clickable((By.XPATH, xpath))
-                            )
-                        else:
-                            join_btn = WebDriverWait(self.driver, 3).until(
-                                EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                            )
-                        join_btn.click()
-                        logger.info("Нажата кнопка присоединения")
-                        join_clicked = True
-                        break
-                    except:
-                        continue
-                
-                if not join_clicked:
-                    # Fallback - ищем любую кнопку с текстом join
-                    join_buttons = self.driver.find_elements(By.CSS_SELECTOR, "button")
-                    for btn in join_buttons:
-                        btn_text = btn.text.lower()
-                        if "join" in btn_text or "присоединиться" in btn_text or "войти" in btn_text:
-                            btn.click()
-                            logger.info("Нажата кнопка присоединения (fallback)")
-                            break
-                            
-            except Exception as e:
-                logger.warning(f"Не удалось нажать кнопку присоединения: {e}")
-                    
-            logger.info(f"Успешно присоединились к встрече: {meeting_url}")
-            return True
+            join_clicked = False
+            join_patterns = [
+                ('css', "button[jsname='Qx7uuf']"),
+                ('css', "button[aria-label*='Join now' i]"),
+                ('css', "button[aria-label*='Ask to join' i]"),
+                ('xpath', "//button[contains(translate(., 'JOIN', 'join'), 'join')]"),
+                ('xpath', "//button[contains(., 'Присоединиться')]"),
+                ('xpath', "//span[contains(translate(., 'JOIN', 'join'), 'join')]/parent::button"),
+            ]
             
+            for method, selector in join_patterns:
+                try:
+                    if method == 'css':
+                        buttons = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    else:
+                        buttons = self.driver.find_elements(By.XPATH, selector)
+                    
+                    for btn in buttons:
+                        if btn.is_displayed() and btn.is_enabled():
+                            btn.click()
+                            logger.info("Нажата кнопка присоединения")
+                            join_clicked = True
+                            time.sleep(3)
+                            break
+                    if join_clicked:
+                        break
+                except Exception as e:
+                    logger.debug(f"Попытка нажать кнопку {selector}: {e}")
+            
+            if not join_clicked:
+                # Последняя попытка - ищем любую кнопку с текстом
+                all_buttons = self.driver.find_elements(By.TAG_NAME, "button")
+                for btn in all_buttons:
+                    text = btn.text.lower()
+                    if any(word in text for word in ['join', 'присоединиться', 'войти']):
+                        try:
+                            btn.click()
+                            logger.info(f"Нажата кнопка: {btn.text}")
+                            join_clicked = True
+                            break
+                        except:
+                            pass
+            
+            if join_clicked:
+                logger.info(f"✅ Успешно присоединились к Google Meet: {meeting_url}")
+                return True
+            else:
+                logger.warning("⚠️ Не удалось найти кнопку присоединения")
+                # Но остаемся на странице - возможно, уже внутри
+                return True
+                
         except Exception as e:
-            logger.error(f"Ошибка при присоединении к Google Meet: {e}")
+            logger.error(f"❌ Ошибка при присоединении к Google Meet: {e}")
             return False
             
     def join_zoom_meeting(self, meeting_id: str, password: Optional[str] = None, name: str = "Meeting Bot"):

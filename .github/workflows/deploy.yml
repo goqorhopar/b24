@@ -1,4 +1,4 @@
-name: Deploy Meeting Bot to Server
+name: Deploy Meeting Bot to VPS
 
 on:
   push:
@@ -13,7 +13,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Deploy to server
+    - name: Deploy to VPS
       uses: appleboy/ssh-action@v1.0.3
       with:
         host: ${{ secrets.VPS_HOST }}
@@ -22,59 +22,85 @@ jobs:
         script: |
           echo "🚀 Начинаю развертывание Meeting Bot..."
           
-          # Останавливаем старый бот
+          # Переходим в рабочую директорию
+          cd /opt/meeting-bot || exit 1
+          
+          # Останавливаем бот
+          echo "⏸️  Останавливаю бота..."
           systemctl stop meeting-bot.service 2>/dev/null || true
           
-          # Переходим в рабочую директорию
-          cd /opt/meeting-bot
+          # Сохраняем текущий .env файл
+          if [ -f .env ]; then
+            cp .env .env.backup
+            echo "💾 .env файл сохранен"
+          fi
           
           # Обновляем код
+          echo "📥 Обновляю код из репозитория..."
           git fetch origin
           git reset --hard origin/main
           
-          # Обновляем зависимости
+          # Восстанавливаем .env если он был
+          if [ -f .env.backup ]; then
+            mv .env.backup .env
+            echo "✅ .env файл восстановлен"
+          fi
+          
+          # Активируем виртуальное окружение
           source venv/bin/activate
+          
+          # Обновляем зависимости
+          echo "📦 Обновляю зависимости..."
+          pip install --upgrade pip
           pip install -r requirements.txt
           
-          # Создаем .env файл с токенами
-          cat > /opt/meeting-bot/.env << 'ENV_EOF'
-          # VPS
-          VPS_HOST=${{ secrets.VPS_HOST }}
-          VPS_USERNAME=${{ secrets.VPS_USERNAME }}
-          VPS_PASSWORD=${{ secrets.VPS_PASSWORD }}
-          
+          # Проверяем .env файл
+          if [ ! -f .env ] || ! grep -q "TELEGRAM_BOT_TOKEN" .env; then
+            echo "⚠️  Создаю .env файл из секретов..."
+            cat > .env << 'ENV_EOF'
           # Telegram
           TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
           
           # GitHub
-          GITHUB_REPO=${{ secrets.REPO_NAME }}
           GITHUB_TOKEN=${{ secrets.REPO_TOKEN }}
-          GITHUB_BRANCH=main
+          GITHUB_REPO=${{ secrets.REPO_NAME }}
           
-          # Deploy
-          DEPLOY_LOCAL_PATH=/opt/meeting-bot
-          SERVICE_NAME=meeting-bot.service
-          
-          # Bot
-          BOT_NAME=AutoMeetingBot
-          RECORD_DIR=/recordings
+          # Bot Settings
+          BOT_NAME=MeetingBot
+          RECORD_DIR=/opt/meeting-bot/recordings
           WHISPER_MODEL=medium
-          MEETING_TIMEOUT_MIN=3
+          MEETING_TIMEOUT_MIN=180
           ENV_EOF
+            echo "✅ .env файл создан из секретов"
+          fi
           
-          # Настраиваем права
+          # Создаем директорию для записей
+          mkdir -p recordings
+          
+          # Настраиваем права доступа
+          echo "🔐 Настраиваю права доступа..."
           chown -R bot:bot /opt/meeting-bot
-          chmod +x /opt/meeting-bot/meeting-bot.py
+          chmod +x meeting-bot.py
+          chmod 600 .env
+          
+          # Перезагружаем systemd
+          systemctl daemon-reload
           
           # Запускаем бота
+          echo "🚀 Запускаю бота..."
           systemctl start meeting-bot.service
           
           # Ждем запуска
-          sleep 5
+          sleep 10
           
           # Проверяем статус
+          echo "📊 Проверяю статус бота..."
           systemctl status meeting-bot.service --no-pager
+          
+          # Проверяем логи на ошибки
+          echo "📋 Последние логи:"
+          journalctl -u meeting-bot.service --no-pager -n 20
           
           echo "✅ Развертывание завершено!"
           
