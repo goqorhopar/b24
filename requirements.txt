@@ -1,0 +1,11 @@
+python-telegram-bot==21.6
+selenium>=4.15.0
+faster-whisper>=1.0.0
+pydub>=0.25.1
+speechrecognition>=3.10.0
+PyAudio>=0.2.11
+PyGithub>=1.59.0
+python-dotenv>=1.0.0
+playwright>=1.48.0
+soundfile>=0.12.1
+psutil>=5.9.0

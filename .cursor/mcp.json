@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "meeting-bot-router": {
+      "command": "python",
+      "args": ["router.py"],
+      "env": {
+        "TELEGRAM_BOT_TOKEN": "7992998044:AAHUNEIBP9nqIC7fmpHqBKAPcoQM5ltrWuI",
+        "GEMINI_KEY": "AIzaSyDQR42zm4pcRMkY9KzKvEmXm7hyR8UzxHI",
+        "BITRIX_TOKEN": "https://skill-to-lead.bitrix24.ru/rest/1403/cmf3ncejqif8ny31/",
+        "ADMIN_CHAT_ID": "7537953397",
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "cwd": "C:\\Users\\PC\\Downloads\\гитхаб\\b24",
+      "restartOnFailure": true,
+      "timeoutMs": 60000,
+      "autoStart": true,
+      "startOnCursorLaunch": true
+    }
+  }
+}

@@ -1,0 +1,88 @@
+name: Deploy Meeting Bot to Server
+
+on:
+  push:
+    branches: [ main-fixed ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Deploy to server
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USERNAME }}
+        password: ${{ secrets.VPS_PASSWORD }}
+        script: |
+          echo "🚀 Начинаю развертывание Meeting Bot..."
+          
+          # Останавливаем старый бот
+          systemctl stop meeting-bot.service 2>/dev/null || true
+          
+          # Переходим в рабочую директорию
+          cd /opt/meeting-bot
+          
+          # Обновляем код
+          git fetch origin
+          git reset --hard origin/main-fixed
+          
+          # Обновляем зависимости
+          source venv/bin/activate
+          pip install -r requirements.txt
+          
+          # Создаем .env файл с токенами
+          cat > /opt/meeting-bot/.env << 'ENV_EOF'
+          # VPS
+          VPS_HOST=${{ secrets.VPS_HOST }}
+          VPS_USERNAME=${{ secrets.VPS_USERNAME }}
+          VPS_PASSWORD=${{ secrets.VPS_PASSWORD }}
+          
+          # Telegram
+          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
+          
+          # GitHub
+          GITHUB_REPO=${{ secrets.GITHUB_REPO }}
+          GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+          GITHUB_BRANCH=main-fixed
+          
+          # Deploy
+          DEPLOY_LOCAL_PATH=/opt/meeting-bot
+          SERVICE_NAME=meeting-bot.service
+          
+          # Bot
+          BOT_NAME=AutoMeetingBot
+          RECORD_DIR=/recordings
+          WHISPER_MODEL=medium
+          MEETING_TIMEOUT_MIN=3
+          ENV_EOF
+          
+          # Настраиваем права
+          chown -R bot:bot /opt/meeting-bot
+          chmod +x /opt/meeting-bot/meeting-bot-main.py
+          
+          # Запускаем бота
+          systemctl start meeting-bot.service
+          
+          # Ждем запуска
+          sleep 5
+          
+          # Проверяем статус
+          systemctl status meeting-bot.service --no-pager
+          
+          echo "✅ Развертывание завершено!"
+          
+    - name: Notify deployment status
+      if: always()
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "✅ Деплой успешно завершен!"
+        else
+          echo "❌ Деплой завершился с ошибкой!"
+        fi
