@@ -61,3 +61,4 @@ chmod +x deploy_fixed_bot.sh
 - ffmpeg
 - Telegram Bot Token
 - GitHub Token
+# Test commit for GitHub Actions
