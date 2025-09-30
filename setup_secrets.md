@@ -11,8 +11,8 @@
 3. **VPS_PASSWORD** = `your_password`
 4. **TELEGRAM_BOT_TOKEN** = `your_telegram_bot_token`
 5. **TELEGRAM_CHAT_ID** = `your_chat_id`
-6. **GITHUB_REPO** = `goqorhopar/b24`
-7. **GITHUB_TOKEN** = `your_github_token`
+6. **REPO_NAME** = `goqorhopar/b24`
+7. **REPO_TOKEN** = `your_github_token`
 
 ## Как добавить секреты:
 
