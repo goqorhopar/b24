@@ -71,6 +71,8 @@ class MeetingBot:
         self.recording_process = None
         self.meeting_url = None
         self.start_time = None
+        self.monitoring_task = None
+        self.meeting_active = True
         
         # Инициализация GitHub
         if GITHUB_TOKEN:
@@ -166,61 +168,19 @@ class MeetingBot:
             self.meeting_url = meeting_url
             
             # Ждем загрузки страницы
-            time.sleep(5)
+            time.sleep(8)
             
             # Проверяем, не требуется ли вход в аккаунт
             if "accounts.google.com" in self.driver.current_url:
                 logger.warning("Требуется вход в Google аккаунт - встреча может быть закрытой")
                 return False
             
-            # Отключаем камеру (новые селекторы 2024-2025)
-            camera_disabled = False
-            camera_selectors = [
-                "button[aria-label*='camera' i][data-is-muted='false']",
-                "button[aria-label*='Turn off camera' i]",
-                "div[jscontroller][jsaction*='camera'] button",
-                "button[jsname='BOHaEe']",
-            ]
-            
-            for selector in camera_selectors:
-                try:
-                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                    for el in elements:
-                        aria_label = el.get_attribute('aria-label') or ''
-                        if 'camera' in aria_label.lower():
-                            el.click()
-                            logger.info("Камера отключена")
-                            camera_disabled = True
-                            time.sleep(0.5)
-                            break
-                    if camera_disabled:
-                        break
-                except Exception as e:
-                    logger.debug(f"Попытка отключить камеру через {selector}: {e}")
-            
-            # Отключаем микрофон
-            mic_disabled = False
-            mic_selectors = [
-                "button[aria-label*='microphone' i][data-is-muted='false']",
-                "button[aria-label*='Turn off microphone' i]",
-                "div[jscontroller][jsaction*='microphone'] button",
-            ]
-            
-            for selector in mic_selectors:
-                try:
-                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                    for el in elements:
-                        aria_label = el.get_attribute('aria-label') or ''
-                        if 'microphone' in aria_label.lower() or 'mic' in aria_label.lower():
-                            el.click()
-                            logger.info("Микрофон отключен")
-                            mic_disabled = True
-                            time.sleep(0.5)
-                            break
-                    if mic_disabled:
-                        break
-                except Exception as e:
-                    logger.debug(f"Попытка отключить микрофон через {selector}: {e}")
+            # Проверяем, не находимся ли уже в встрече
+            if "meet.google.com" in self.driver.current_url and "meet.google.com/" in self.driver.current_url:
+                logger.info("Уже находимся в Google Meet - возможно, автоматически подключились")
+                # Отключаем камеру и микрофон если уже в встрече
+                self._disable_media_in_meeting()
+                return True
             
             # Ищем поле ввода имени (если есть)
             try:
@@ -232,7 +192,7 @@ class MeetingBot:
                         inp.clear()
                         inp.send_keys(name)
                         logger.info(f"Введено имя: {name}")
-                        time.sleep(0.5)
+                        time.sleep(1)
                         break
             except Exception as e:
                 logger.debug(f"Не удалось ввести имя: {e}")
@@ -243,9 +203,11 @@ class MeetingBot:
                 ('css', "button[jsname='Qx7uuf']"),
                 ('css', "button[aria-label*='Join now' i]"),
                 ('css', "button[aria-label*='Ask to join' i]"),
+                ('css', "button[data-is-muted='false'][aria-label*='Join']"),
                 ('xpath', "//button[contains(translate(., 'JOIN', 'join'), 'join')]"),
                 ('xpath', "//button[contains(., 'Присоединиться')]"),
                 ('xpath', "//span[contains(translate(., 'JOIN', 'join'), 'join')]/parent::button"),
+                ('xpath', "//button[contains(., 'Ask to join')]"),
             ]
             
             for method, selector in join_patterns:
@@ -258,9 +220,9 @@ class MeetingBot:
                     for btn in buttons:
                         if btn.is_displayed() and btn.is_enabled():
                             btn.click()
-                            logger.info("Нажата кнопка присоединения")
+                            logger.info(f"Нажата кнопка присоединения: {btn.text or btn.get_attribute('aria-label')}")
                             join_clicked = True
-                            time.sleep(3)
+                            time.sleep(5)  # Ждем дольше после нажатия
                             break
                     if join_clicked:
                         break
@@ -272,26 +234,78 @@ class MeetingBot:
                 all_buttons = self.driver.find_elements(By.TAG_NAME, "button")
                 for btn in all_buttons:
                     text = btn.text.lower()
-                    if any(word in text for word in ['join', 'присоединиться', 'войти']):
+                    if any(word in text for word in ['join', 'присоединиться', 'войти', 'ask to join']):
                         try:
                             btn.click()
                             logger.info(f"Нажата кнопка: {btn.text}")
                             join_clicked = True
+                            time.sleep(5)
                             break
                         except:
                             pass
             
-            if join_clicked:
+            # Проверяем, удалось ли присоединиться
+            time.sleep(3)
+            if "meet.google.com" in self.driver.current_url:
                 logger.info(f"✅ Успешно присоединились к Google Meet: {meeting_url}")
+                # Отключаем камеру и микрофон
+                self._disable_media_in_meeting()
                 return True
             else:
-                logger.warning("⚠️ Не удалось найти кнопку присоединения")
-                # Но остаемся на странице - возможно, уже внутри
-                return True
+                logger.warning("⚠️ Не удалось присоединиться к встрече")
+                return False
                 
         except Exception as e:
             logger.error(f"❌ Ошибка при присоединении к Google Meet: {e}")
             return False
+    
+    def _disable_media_in_meeting(self):
+        """Отключить камеру и микрофон в активной встрече"""
+        try:
+            # Отключаем камеру
+            camera_selectors = [
+                "button[aria-label*='camera' i][data-is-muted='false']",
+                "button[aria-label*='Turn off camera' i]",
+                "div[jscontroller][jsaction*='camera'] button",
+                "button[jsname='BOHaEe']",
+                "button[data-is-muted='false'][aria-label*='camera']",
+            ]
+            
+            for selector in camera_selectors:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    for el in elements:
+                        aria_label = el.get_attribute('aria-label') or ''
+                        if 'camera' in aria_label.lower() and 'turn off' in aria_label.lower():
+                            el.click()
+                            logger.info("Камера отключена")
+                            time.sleep(0.5)
+                            break
+                except Exception as e:
+                    logger.debug(f"Попытка отключить камеру через {selector}: {e}")
+            
+            # Отключаем микрофон
+            mic_selectors = [
+                "button[aria-label*='microphone' i][data-is-muted='false']",
+                "button[aria-label*='Turn off microphone' i]",
+                "div[jscontroller][jsaction*='microphone'] button",
+                "button[data-is-muted='false'][aria-label*='microphone']",
+            ]
+            
+            for selector in mic_selectors:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    for el in elements:
+                        aria_label = el.get_attribute('aria-label') or ''
+                        if ('microphone' in aria_label.lower() or 'mic' in aria_label.lower()) and 'turn off' in aria_label.lower():
+                            el.click()
+                            logger.info("Микрофон отключен")
+                            time.sleep(0.5)
+                            break
+                except Exception as e:
+                    logger.debug(f"Попытка отключить микрофон через {selector}: {e}")
+        except Exception as e:
+            logger.debug(f"Ошибка при отключении медиа: {e}")
     
     def join_zoom_meeting(self, meeting_url: str, name: str = "Meeting Bot"):
         """Присоединиться к Zoom встрече"""
@@ -469,12 +483,13 @@ class MeetingBot:
             return False
     
     def start_recording(self):
-        """Начать запись аудио через ffmpeg"""
+        """Начать запись аудио через ffmpeg на всю встречу"""
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.audio_file = os.path.join(RECORD_DIR, f"meeting_{timestamp}.wav")
             
             # Пытаемся разные источники аудио для Linux VPS
+            # Убираем ограничение по времени - записываем до остановки
             audio_sources = [
                 ['ffmpeg', '-f', 'pulse', '-i', 'default', '-ac', '2', '-ar', '16000', '-y', self.audio_file],
                 ['ffmpeg', '-f', 'alsa', '-i', 'default', '-ac', '2', '-ar', '16000', '-y', self.audio_file],
@@ -493,8 +508,12 @@ class MeetingBot:
                     if self.recording_process.poll() is None:
                         self.recording = True
                         self.start_time = datetime.now()
-                        logger.info(f"✅ Начата запись аудио: {self.audio_file}")
+                        self.meeting_active = True
+                        logger.info(f"✅ Начата запись аудио на всю встречу: {self.audio_file}")
                         logger.info(f"Команда: {' '.join(cmd)}")
+                        
+                        # Запускаем мониторинг встречи
+                        self.start_meeting_monitoring()
                         return True
                     else:
                         logger.debug(f"Команда не сработала: {' '.join(cmd)}")
@@ -508,9 +527,76 @@ class MeetingBot:
             logger.error(f"❌ Критическая ошибка при начале записи: {e}")
             return False
     
+    def start_meeting_monitoring(self):
+        """Запустить мониторинг состояния встречи"""
+        try:
+            import threading
+            self.monitoring_task = threading.Thread(target=self._monitor_meeting, daemon=True)
+            self.monitoring_task.start()
+            logger.info("🔍 Мониторинг встречи запущен")
+        except Exception as e:
+            logger.error(f"Ошибка запуска мониторинга: {e}")
+    
+    def _monitor_meeting(self):
+        """Мониторить состояние встречи в фоновом режиме"""
+        try:
+            while self.recording and self.meeting_active:
+                time.sleep(30)  # Проверяем каждые 30 секунд
+                
+                if not self.driver:
+                    logger.info("🔍 Драйвер не найден - встреча завершена")
+                    self.meeting_active = False
+                    break
+                
+                try:
+                    current_url = self.driver.current_url
+                    
+                    # Проверяем, не покинули ли встречу
+                    if "meet.google.com" not in current_url and "zoom.us" not in current_url:
+                        logger.info("🔍 Покинули встречу - останавливаем запись")
+                        self.meeting_active = False
+                        break
+                    
+                    # Проверяем, не появились ли сообщения о завершении встречи
+                    try:
+                        end_indicators = [
+                            "//div[contains(text(), 'Everyone left')]",
+                            "//div[contains(text(), 'Meeting ended')]",
+                            "//div[contains(text(), 'Встреча завершена')]",
+                            "//div[contains(text(), 'Все покинули')]",
+                        ]
+                        
+                        for indicator in end_indicators:
+                            elements = self.driver.find_elements(By.XPATH, indicator)
+                            if elements:
+                                logger.info("🔍 Обнаружено завершение встречи")
+                                self.meeting_active = False
+                                break
+                        
+                        if not self.meeting_active:
+                            break
+                            
+                    except Exception as e:
+                        logger.debug(f"Ошибка проверки индикаторов: {e}")
+                        
+                except Exception as e:
+                    logger.debug(f"Ошибка мониторинга: {e}")
+                    # Если не можем проверить состояние, считаем что встреча активна
+                    continue
+            
+            # Если мониторинг обнаружил завершение встречи, останавливаем запись
+            if not self.meeting_active and self.recording:
+                logger.info("🔍 Автоматическая остановка записи - встреча завершена")
+                self.stop_recording()
+                
+        except Exception as e:
+            logger.error(f"Ошибка в мониторинге встречи: {e}")
+    
     def stop_recording(self):
         """Остановить запись"""
         try:
+            self.meeting_active = False  # Останавливаем мониторинг
+            
             if self.recording and self.recording_process:
                 self.recording_process.terminate()
                 try:
@@ -664,6 +750,7 @@ class MeetingBot:
     
     def cleanup(self):
         """Очистка ресурсов"""
+        self.meeting_active = False  # Останавливаем мониторинг
         self.leave_meeting()
         if self.recording:
             self.stop_recording()
@@ -773,11 +860,11 @@ async def handle_meeting_url(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     
     # Отправляем сообщение о начале подключения
-    status_msg = await update.message.reply_text("⏳ Подключаюсь к встрече...")
+    status_msg = await update.message.reply_text("🎯 **Встреча обнаружена!**\n\n🔗 **URL:** " + url + "\n\n🚀 **Начинаю обработку...**")
     
     try:
         # Настраиваем драйвер
-        await status_msg.edit_text("⏳ Инициализация браузера...")
+        await status_msg.edit_text("🎯 **Встреча обнаружена!**\n\n🔗 **URL:** " + url + "\n\n🚀 **Начинаю обработку...**\n⏳ Инициализация браузера...")
         bot.setup_driver(headless=True)
         
         # Подключаемся к встрече
@@ -788,7 +875,7 @@ async def handle_meeting_url(update: Update, context: ContextTypes.DEFAULT_TYPE)
             'contour': 'Контур.Толк'
         }
         
-        await status_msg.edit_text(f"⏳ Подключаюсь к {meeting_names.get(meeting_type, 'встрече')}...")
+        await status_msg.edit_text("🎯 **Встреча обнаружена!**\n\n🔗 **URL:** " + url + "\n\n🚀 **Начинаю обработку...**\n⏳ Подключаюсь к " + meeting_names.get(meeting_type, 'встрече') + "...")
         
         success = False
         if meeting_type == 'google_meet':
@@ -801,10 +888,10 @@ async def handle_meeting_url(update: Update, context: ContextTypes.DEFAULT_TYPE)
             success = bot.join_contour_talk(url)
         
         if success:
-            await status_msg.edit_text("✅ Успешно подключился к встрече!")
+            await status_msg.edit_text("🎯 **Встреча обнаружена!**\n\n🔗 **URL:** " + url + "\n\n🚀 **Начинаю обработку...**\n✅ Успешно подключился к встрече!")
             
             # Начинаем запись
-            await update.message.reply_text("🎙️ Начинаю запись...")
+            await update.message.reply_text("🎙️ Записываю аудио встречи...")
             
             if bot.start_recording():
                 # Сохраняем бота в активные
