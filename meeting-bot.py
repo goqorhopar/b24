@@ -59,6 +59,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 class MeetingBot:
     """Основной класс для работы с встречами"""
     
@@ -291,100 +292,220 @@ class MeetingBot:
         except Exception as e:
             logger.error(f"❌ Ошибка при присоединении к Google Meet: {e}")
             return False
-            
-    def join_zoom_meeting(self, meeting_id: str, password: Optional[str] = None, name: str = "Meeting Bot"):
-        """Присоединиться к Zoom встрече через веб-клиент"""
+    
+    def join_zoom_meeting(self, meeting_url: str, name: str = "Meeting Bot"):
+        """Присоединиться к Zoom встрече"""
         try:
-            zoom_url = f"https://zoom.us/wc/{meeting_id}/join"
-            self.driver.get(zoom_url)
+            logger.info(f"Открываем Zoom: {meeting_url}")
+            
+            # Если это ссылка вида zoom.us/j/123456789
+            if '/j/' in meeting_url:
+                # Добавляем параметр для веб-клиента
+                if '?' in meeting_url:
+                    meeting_url += '&web=1'
+                else:
+                    meeting_url += '?web=1'
+            
+            self.driver.get(meeting_url)
+            self.meeting_url = meeting_url
+            time.sleep(5)
+            
+            # Ищем кнопку "Join from Browser" / "Launch Meeting"
+            try:
+                web_join_buttons = self.driver.find_elements(By.XPATH, 
+                    "//a[contains(text(), 'Join from Browser') or contains(text(), 'Launch Meeting') or contains(text(), 'browser')]")
+                for btn in web_join_buttons:
+                    if btn.is_displayed():
+                        btn.click()
+                        logger.info("Нажата кнопка входа через браузер")
+                        time.sleep(3)
+                        break
+            except Exception as e:
+                logger.debug(f"Кнопка входа через браузер не найдена: {e}")
             
             # Вводим имя
-            name_input = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.ID, "inputname"))
-            )
-            name_input.send_keys(name)
-            
-            # Если есть пароль
-            if password:
-                password_input = self.driver.find_element(By.ID, "inputpasscode")
-                password_input.send_keys(password)
-            
-            # Присоединяемся
-            join_btn = self.driver.find_element(By.ID, "joinBtn")
-            join_btn.click()
-            
-            logger.info(f"Успешно присоединились к Zoom встрече: {meeting_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Ошибка при присоединении к Zoom: {e}")
-            return False
-            
-    def join_yandex_telemost(self, meeting_url: str, name: str = "Meeting Bot"):
-        """Присоединиться к Яндекс Телемост"""
-        try:
-            self.driver.get(meeting_url)
-            
-            # Ждем загрузки
-            WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.TAG_NAME, "body"))
-            )
-            
-            # Вводим имя если требуется
             try:
-                name_input = WebDriverWait(self.driver, 5).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='text']"))
+                name_input = WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.ID, "inputname"))
                 )
                 name_input.clear()
                 name_input.send_keys(name)
-            except:
-                pass
+                logger.info(f"Введено имя: {name}")
+            except Exception as e:
+                logger.debug(f"Не удалось ввести имя: {e}")
             
-            # Отключаем камеру и микрофон
-            controls = self.driver.find_elements(By.CSS_SELECTOR, "button")
-            for control in controls:
-                aria_label = control.get_attribute("aria-label")
-                if aria_label and ("камера" in aria_label.lower() or "микрофон" in aria_label.lower()):
-                    control.click()
+            # Ищем и нажимаем кнопку Join
+            try:
+                join_button = WebDriverWait(self.driver, 10).until(
+                    EC.element_to_be_clickable((By.ID, "joinBtn"))
+                )
+                join_button.click()
+                logger.info("Нажата кнопка Join")
+                time.sleep(3)
+            except Exception as e:
+                logger.warning(f"Стандартная кнопка Join не найдена: {e}")
+                # Ищем альтернативные кнопки
+                join_buttons = self.driver.find_elements(By.XPATH, "//button[contains(., 'Join')]")
+                for btn in join_buttons:
+                    try:
+                        btn.click()
+                        logger.info("Нажата альтернативная кнопка Join")
+                        break
+                    except:
+                        pass
             
-            # Присоединяемся
-            join_buttons = self.driver.find_elements(By.CSS_SELECTOR, "button")
-            for btn in join_buttons:
-                if "войти" in btn.text.lower() or "присоединиться" in btn.text.lower():
-                    btn.click()
-                    break
-                    
-            logger.info(f"Успешно присоединились к Яндекс Телемост: {meeting_url}")
+            logger.info(f"✅ Подключились к Zoom: {meeting_url}")
             return True
             
         except Exception as e:
-            logger.error(f"Ошибка при присоединении к Яндекс Телемост: {e}")
+            logger.error(f"❌ Ошибка при присоединении к Zoom: {e}")
+            return False
+    
+    def join_yandex_telemost(self, meeting_url: str, name: str = "Meeting Bot"):
+        """Присоединиться к Яндекс Телемост"""
+        try:
+            logger.info(f"Открываем Яндекс Телемост: {meeting_url}")
+            self.driver.get(meeting_url)
+            self.meeting_url = meeting_url
+            time.sleep(5)
+            
+            # Вводим имя
+            try:
+                name_inputs = self.driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
+                for inp in name_inputs:
+                    if inp.is_displayed():
+                        inp.clear()
+                        inp.send_keys(name)
+                        logger.info(f"Введено имя: {name}")
+                        time.sleep(0.5)
+                        break
+            except Exception as e:
+                logger.debug(f"Не удалось ввести имя: {e}")
+            
+            # Отключаем камеру и микрофон
+            try:
+                controls = self.driver.find_elements(By.TAG_NAME, "button")
+                for control in controls:
+                    aria_label = (control.get_attribute("aria-label") or '').lower()
+                    title = (control.get_attribute("title") or '').lower()
+                    if any(word in aria_label or word in title for word in ['камера', 'camera', 'микрофон', 'microphone']):
+                        control.click()
+                        time.sleep(0.3)
+            except Exception as e:
+                logger.debug(f"Не удалось отключить медиа: {e}")
+            
+            # Ищем кнопку входа
+            join_clicked = False
+            join_words = ['войти', 'присоединиться', 'join', 'enter']
+            
+            buttons = self.driver.find_elements(By.TAG_NAME, "button")
+            for btn in buttons:
+                text = btn.text.lower()
+                if any(word in text for word in join_words) and btn.is_displayed():
+                    try:
+                        btn.click()
+                        logger.info(f"Нажата кнопка: {btn.text}")
+                        join_clicked = True
+                        time.sleep(3)
+                        break
+                    except:
+                        pass
+            
+            if join_clicked or 'telemost.yandex' in self.driver.current_url:
+                logger.info(f"✅ Подключились к Яндекс Телемост: {meeting_url}")
+                return True
+            else:
+                logger.warning("⚠️ Не удалось найти кнопку входа")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка при присоединении к Яндекс Телемост: {e}")
+            return False
+    
+    def join_contour_talk(self, meeting_url: str, name: str = "Meeting Bot"):
+        """Присоединиться к Контур.Толк"""
+        try:
+            logger.info(f"Открываем Контур.Толк: {meeting_url}")
+            self.driver.get(meeting_url)
+            self.meeting_url = meeting_url
+            time.sleep(5)
+            
+            # Вводим имя если требуется
+            try:
+                name_inputs = self.driver.find_elements(By.CSS_SELECTOR, "input[type='text'], input[type='name']")
+                for inp in name_inputs:
+                    if inp.is_displayed():
+                        inp.clear()
+                        inp.send_keys(name)
+                        logger.info(f"Введено имя: {name}")
+                        break
+            except Exception as e:
+                logger.debug(f"Поле имени не найдено: {e}")
+            
+            # Ищем кнопку подключения
+            join_patterns = [
+                ('xpath', "//button[contains(., 'Подключиться')]"),
+                ('xpath', "//button[contains(., 'Войти')]"),
+                ('xpath', "//button[contains(., 'Join')]"),
+            ]
+            
+            for method, selector in join_patterns:
+                try:
+                    buttons = self.driver.find_elements(By.XPATH, selector)
+                    for btn in buttons:
+                        if btn.is_displayed():
+                            btn.click()
+                            logger.info("Нажата кнопка подключения")
+                            time.sleep(3)
+                            return True
+                except:
+                    pass
+            
+            logger.info(f"✅ Подключились к Контур.Толк: {meeting_url}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при присоединении к Контур.Толк: {e}")
             return False
     
     def start_recording(self):
-        """Начать запись аудио с системы"""
+        """Начать запись аудио через ffmpeg"""
         try:
-            # Используем PulseAudio для захвата системного аудио
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.audio_file = f"/tmp/meeting_{timestamp}.wav"
+            self.audio_file = os.path.join(RECORD_DIR, f"meeting_{timestamp}.wav")
             
-            # Запускаем запись через ffmpeg
-            self.recording_process = subprocess.Popen([
-                'ffmpeg',
-                '-f', 'pulse',
-                '-i', 'default',  # или 'alsa_output.pci-0000_00_1f.3.analog-stereo.monitor'
-                '-ac', '2',
-                '-ar', '44100',
-                '-y',
-                self.audio_file
-            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            # Пытаемся разные источники аудио для Linux VPS
+            audio_sources = [
+                ['ffmpeg', '-f', 'pulse', '-i', 'default', '-ac', '2', '-ar', '16000', '-y', self.audio_file],
+                ['ffmpeg', '-f', 'alsa', '-i', 'default', '-ac', '2', '-ar', '16000', '-y', self.audio_file],
+                ['ffmpeg', '-f', 'pulse', '-i', 'alsa_output.pci-0000_00_1f.3.analog-stereo.monitor', '-ac', '2', '-ar', '16000', '-y', self.audio_file],
+            ]
             
-            self.recording = True
-            logger.info(f"Начата запись аудио: {self.audio_file}")
-            return True
+            for cmd in audio_sources:
+                try:
+                    self.recording_process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE
+                    )
+                    # Проверяем, что процесс запустился
+                    time.sleep(1)
+                    if self.recording_process.poll() is None:
+                        self.recording = True
+                        self.start_time = datetime.now()
+                        logger.info(f"✅ Начата запись аудио: {self.audio_file}")
+                        logger.info(f"Команда: {' '.join(cmd)}")
+                        return True
+                    else:
+                        logger.debug(f"Команда не сработала: {' '.join(cmd)}")
+                except Exception as e:
+                    logger.debug(f"Ошибка запуска {cmd}: {e}")
+            
+            logger.error("❌ Не удалось запустить запись аудио ни одним способом")
+            return False
             
         except Exception as e:
-            logger.error(f"Ошибка при начале записи: {e}")
+            logger.error(f"❌ Критическая ошибка при начале записи: {e}")
             return False
     
     def stop_recording(self):
@@ -392,88 +513,144 @@ class MeetingBot:
         try:
             if self.recording and self.recording_process:
                 self.recording_process.terminate()
-                self.recording_process.wait()
+                try:
+                    self.recording_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.recording_process.kill()
+                    self.recording_process.wait()
+                
                 self.recording = False
-                logger.info("Запись остановлена")
-                return True
+                logger.info("⏹️ Запись остановлена")
+                
+                # Проверяем, что файл создан
+                if os.path.exists(self.audio_file):
+                    size = os.path.getsize(self.audio_file)
+                    logger.info(f"Размер записанного файла: {size} байт")
+                    return True
+                else:
+                    logger.error("Файл записи не найден")
+                    return False
+            return True
         except Exception as e:
-            logger.error(f"Ошибка при остановке записи: {e}")
+            logger.error(f"❌ Ошибка при остановке записи: {e}")
             return False
     
-    def transcribe_audio(self):
-        """Транскрибировать аудио файл"""
+    def transcribe_audio_whisper(self):
+        """Транскрибировать аудио с помощью Faster Whisper"""
         try:
             if not self.audio_file or not os.path.exists(self.audio_file):
-                logger.error("Аудио файл не найден")
+                logger.error("❌ Аудио файл не найден")
                 return None
-                
-            recognizer = sr.Recognizer()
             
-            # Конвертируем в формат для speech_recognition
-            audio = AudioSegment.from_wav(self.audio_file)
-            audio = audio.set_channels(1)  # Моно
-            audio = audio.set_frame_rate(16000)  # 16kHz
+            if not self.whisper_model:
+                logger.error("❌ Whisper модель не загружена")
+                return None
             
-            temp_file = "/tmp/temp_audio.wav"
-            audio.export(temp_file, format="wav")
+            file_size = os.path.getsize(self.audio_file)
+            logger.info(f"🎙️ Начинаем транскрипцию файла: {self.audio_file} ({file_size} байт)")
             
-            # Распознаем речь
-            with sr.AudioFile(temp_file) as source:
-                audio_data = recognizer.record(source)
-                
-            # Используем Google Speech Recognition
-            try:
-                text = recognizer.recognize_google(audio_data, language="ru-RU")
-                self.transcript.append({
-                    "timestamp": datetime.now().isoformat(),
-                    "text": text
-                })
-                logger.info("Транскрипция завершена")
-                return text
-            except sr.UnknownValueError:
-                logger.warning("Не удалось распознать речь")
-                return "Не удалось распознать речь"
-            except sr.RequestError as e:
-                logger.error(f"Ошибка сервиса распознавания: {e}")
-                return f"Ошибка: {e}"
+            if file_size < 1000:
+                logger.warning("⚠️ Файл слишком маленький, возможно запись не удалась")
+                return "Ошибка: файл записи слишком мал, возможно аудио не было записано"
+            
+            # Транскрибируем
+            segments, info = self.whisper_model.transcribe(
+                self.audio_file,
+                language="ru",
+                beam_size=5,
+                vad_filter=True,
+                vad_parameters=dict(min_silence_duration_ms=500)
+            )
+            
+            logger.info(f"Обнаружен язык: {info.language} (вероятность: {info.language_probability:.2f})")
+            
+            # Собираем текст
+            full_text = []
+            for segment in segments:
+                text = segment.text.strip()
+                if text:
+                    timestamp = f"[{self._format_timestamp(segment.start)} --> {self._format_timestamp(segment.end)}]"
+                    full_text.append(f"{timestamp}\n{text}\n")
+                    self.transcript.append({
+                        "start": segment.start,
+                        "end": segment.end,
+                        "text": text
+                    })
+            
+            if full_text:
+                result = "\n".join(full_text)
+                logger.info(f"✅ Транскрипция завершена. Сегментов: {len(self.transcript)}")
+                return result
+            else:
+                logger.warning("⚠️ Транскрипт пуст - речь не обнаружена")
+                return "Транскрипт пуст: речь не обнаружена в записи"
                 
         except Exception as e:
-            logger.error(f"Ошибка при транскрипции: {e}")
-            return None
+            logger.error(f"❌ Ошибка при транскрипции: {e}")
+            return f"Ошибка транскрипции: {str(e)}"
+    
+    def _format_timestamp(self, seconds: float) -> str:
+        """Форматировать временную метку"""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
     
     def save_to_github(self, content: str, filename: str):
         """Сохранить транскрипт в GitHub"""
         try:
             if not self.repo:
-                logger.warning("GitHub репозиторий не настроен")
+                logger.warning("⚠️ GitHub репозиторий не настроен")
                 return False
-                
+            
             path = f"transcripts/{filename}"
             
-            # Проверяем существует ли файл
             try:
+                # Проверяем существует ли файл
                 file = self.repo.get_contents(path)
                 # Обновляем существующий файл
                 self.repo.update_file(
                     path,
                     f"Update transcript {filename}",
                     content,
-                    file.sha
+                    file.sha,
+                    branch="main"
                 )
+                logger.info(f"✅ Файл обновлен в GitHub: {path}")
             except:
                 # Создаем новый файл
                 self.repo.create_file(
                     path,
                     f"Add transcript {filename}",
-                    content
+                    content,
+                    branch="main"
                 )
+                logger.info(f"✅ Файл создан в GitHub: {path}")
             
-            logger.info(f"Файл сохранен в GitHub: {path}")
             return True
             
         except Exception as e:
-            logger.error(f"Ошибка при сохранении в GitHub: {e}")
+            logger.error(f"❌ Ошибка при сохранении в GitHub: {e}")
             return False
+    
+    def get_meeting_info(self) -> str:
+        """Получить информацию о встрече"""
+        try:
+            info = []
+            info.append(f"🔗 URL: {self.meeting_url}")
+            info.append(f"⏱️ Начало: {self.start_time.strftime('%Y-%m-%d %H:%M:%S') if self.start_time else 'N/A'}")
+            
+            if self.recording:
+                duration = (datetime.now() - self.start_time).total_seconds() / 60
+                info.append(f"⏳ Длительность: {duration:.1f} мин")
+            
+            if self.audio_file and os.path.exists(self.audio_file):
+                size_mb = os.path.getsize(self.audio_file) / (1024 * 1024)
+                info.append(f"💾 Размер записи: {size_mb:.2f} МБ")
+            
+            return "\n".join(info)
+        except Exception as e:
+            return f"Ошибка получения информации: {e}"
     
     def leave_meeting(self):
         """Покинуть встречу"""
@@ -481,165 +658,360 @@ class MeetingBot:
             if self.driver:
                 self.driver.quit()
                 self.driver = None
-            logger.info("Покинули встречу")
+            logger.info("👋 Покинули встречу")
         except Exception as e:
-            logger.error(f"Ошибка при выходе из встречи: {e}")
+            logger.error(f"❌ Ошибка при выходе из встречи: {e}")
     
     def cleanup(self):
         """Очистка ресурсов"""
         self.leave_meeting()
         if self.recording:
             self.stop_recording()
-        if self.audio_file and os.path.exists(self.audio_file):
-            os.remove(self.audio_file)
+        # Не удаляем аудио файл - он нужен для транскрипции
+
+
+# Глобальные переменные для хранения активных ботов
+active_bots: Dict[int, MeetingBot] = {}
 
 
 # Telegram Bot Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     keyboard = [
-        [InlineKeyboardButton("🎥 Google Meet", callback_data='google_meet')],
-        [InlineKeyboardButton("💻 Zoom", callback_data='zoom')],
-        [InlineKeyboardButton("📹 Яндекс Телемост", callback_data='yandex')],
-        [InlineKeyboardButton("📊 Статус", callback_data='status')]
+        [InlineKeyboardButton("📊 Статус", callback_data='status')],
+        [InlineKeyboardButton("❓ Помощь", callback_data='help')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(
-        "🤖 Бот для автоматического участия во встречах\n\n"
-        "Выберите тип встречи:",
-        reply_markup=reply_markup
+    welcome_text = (
+        "🤖 *Meeting Bot* - Автоматическое участие во встречах\n\n"
+        "📝 *Поддерживаемые платформы:*\n"
+        "• Google Meet\n"
+        "• Zoom\n"
+        "• Яндекс Телемост\n"
+        "• Контур.Толк\n\n"
+        "📤 *Как использовать:*\n"
+        "Просто отправьте ссылку на встречу, и бот:\n"
+        "1️⃣ Присоединится к встрече\n"
+        "2️⃣ Запишет аудио\n"
+        "3️⃣ Создаст транскрипт\n"
+        "4️⃣ Отправит результат вам\n\n"
+        "Отправьте ссылку для начала работы! 🚀"
     )
+    
+    await update.message.reply_text(welcome_text, parse_mode='Markdown', reply_markup=reply_markup)
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /help"""
+    help_text = (
+        "📖 *Инструкция по использованию*\n\n"
+        "*Шаг 1:* Отправьте ссылку на встречу\n"
+        "Пример: `https://meet.google.com/abc-defg-hij`\n\n"
+        "*Шаг 2:* Дождитесь подключения бота\n"
+        "Бот автоматически присоединится и начнет запись\n\n"
+        "*Шаг 3:* Управляйте встречей\n"
+        "• ⏹️ Остановить запись\n"
+        "• 🚪 Покинуть встречу\n"
+        "• 📊 Проверить статус\n\n"
+        "*Шаг 4:* Получите транскрипт\n"
+        "После остановки записи бот создаст и отправит транскрипт\n\n"
+        "*Поддерживаемые форматы ссылок:*\n"
+        "• `meet.google.com/xxx`\n"
+        "• `zoom.us/j/xxx`\n"
+        "• `telemost.yandex.ru/xxx`\n"
+        "• `talk.contour.ru/xxx`\n\n"
+        "*Команды:*\n"
+        "/start - Главное меню\n"
+        "/help - Эта справка\n"
+        "/status - Текущий статус"
+    )
+    
+    await update.message.reply_text(help_text, parse_mode='Markdown')
+
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /status"""
+    user_id = update.effective_user.id
+    bot = active_bots.get(user_id)
+    
+    if bot and bot.recording:
+        info = bot.get_meeting_info()
+        status_text = f"🟢 *Статус: Активен*\n\n{info}"
+    else:
+        status_text = "🔴 *Статус: Неактивен*\n\nНет активных встреч"
+    
+    await update.message.reply_text(status_text, parse_mode='Markdown')
+
 
 async def handle_meeting_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик URL встречи"""
-    url = update.message.text
+    url = update.message.text.strip()
     user_id = update.effective_user.id
     
-    # Определяем тип встречи
-    meeting_type = None
-    if 'meet.google.com' in url:
-        meeting_type = 'google_meet'
-    elif 'zoom.us' in url:
-        meeting_type = 'zoom'
-    elif 'telemost.yandex' in url:
-        meeting_type = 'yandex'
-    
-    if not meeting_type:
-        await update.message.reply_text("❌ Не удалось определить тип встречи. Поддерживаются: Google Meet, Zoom, Яндекс Телемост")
+    # Проверяем, есть ли уже активный бот
+    if user_id in active_bots:
+        await update.message.reply_text(
+            "⚠️ У вас уже есть активная встреча!\n"
+            "Сначала завершите текущую встречу."
+        )
         return
     
-    await update.message.reply_text(f"⏳ Подключаюсь к встрече...")
+    # Определяем тип встречи
+    bot = MeetingBot()
+    meeting_type = bot.detect_meeting_type(url)
     
-    # Создаем бота и подключаемся
-    bot = None
+    if meeting_type == 'unknown':
+        await update.message.reply_text(
+            "❌ Не удалось определить тип встречи.\n\n"
+            "Поддерживаемые платформы:\n"
+            "• Google Meet (meet.google.com)\n"
+            "• Zoom (zoom.us)\n"
+            "• Яндекс Телемост (telemost.yandex.ru)\n"
+            "• Контур.Толк (talk.contour.ru)"
+        )
+        return
+    
+    # Отправляем сообщение о начале подключения
+    status_msg = await update.message.reply_text("⏳ Подключаюсь к встрече...")
+    
     try:
-        bot = MeetingBot()
+        # Настраиваем драйвер
+        await status_msg.edit_text("⏳ Инициализация браузера...")
         bot.setup_driver(headless=True)
+        
+        # Подключаемся к встрече
+        meeting_names = {
+            'google_meet': 'Google Meet',
+            'zoom': 'Zoom',
+            'yandex': 'Яндекс Телемост',
+            'contour': 'Контур.Толк'
+        }
+        
+        await status_msg.edit_text(f"⏳ Подключаюсь к {meeting_names.get(meeting_type, 'встрече')}...")
         
         success = False
         if meeting_type == 'google_meet':
             success = bot.join_google_meet(url)
         elif meeting_type == 'zoom':
-            # Извлекаем ID встречи из URL
-            meeting_id = url.split('/')[-1].split('?')[0]
-            success = bot.join_zoom_meeting(meeting_id)
+            success = bot.join_zoom_meeting(url)
         elif meeting_type == 'yandex':
             success = bot.join_yandex_telemost(url)
+        elif meeting_type == 'contour':
+            success = bot.join_contour_talk(url)
         
         if success:
-            await update.message.reply_text("✅ Успешно подключился к встрече!")
+            await status_msg.edit_text("✅ Успешно подключился к встрече!")
             
             # Начинаем запись
+            await update.message.reply_text("🎙️ Начинаю запись...")
+            
             if bot.start_recording():
-                await update.message.reply_text("🎙️ Запись началась...")
+                # Сохраняем бота в активные
+                active_bots[user_id] = bot
                 
-                # Сохраняем контекст
-                context.user_data['bot'] = bot
-                context.user_data['recording'] = True
-                
-                # Отправляем кнопки управления
+                # Отправляем информацию и кнопки управления
+                info = bot.get_meeting_info()
                 keyboard = [
-                    [InlineKeyboardButton("⏹️ Остановить запись", callback_data='stop_recording')],
-                    [InlineKeyboardButton("🚪 Покинуть встречу", callback_data='leave_meeting')]
+                    [InlineKeyboardButton("⏹️ Остановить и получить транскрипт", callback_data='stop_and_transcribe')],
+                    [InlineKeyboardButton("🚪 Покинуть встречу", callback_data='leave_meeting')],
+                    [InlineKeyboardButton("📊 Статус", callback_data='status')]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                await update.message.reply_text("Управление встречей:", reply_markup=reply_markup)
-            else:
-                await update.message.reply_text("⚠️ Подключился к встрече, но не удалось начать запись")
-        else:
-            await update.message.reply_text("❌ Не удалось подключиться к встрече. Проверьте URL и попробуйте снова.")
-            if bot:
-                bot.cleanup()
                 
+                await update.message.reply_text(
+                    f"✅ *Запись началась!*\n\n{info}\n\n"
+                    f"Используйте кнопки ниже для управления:",
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+            else:
+                await update.message.reply_text(
+                    "⚠️ Подключился к встрече, но не удалось начать запись.\n"
+                    "Возможные причины:\n"
+                    "• PulseAudio не настроен на сервере\n"
+                    "• Нет прав доступа к аудио устройствам"
+                )
+                bot.cleanup()
+                if user_id in active_bots:
+                    del active_bots[user_id]
+        else:
+            await status_msg.edit_text(
+                "❌ Не удалось подключиться к встрече.\n\n"
+                "Возможные причины:\n"
+                "• Встреча требует авторизации\n"
+                "• Неверная ссылка\n"
+                "• Встреча еще не началась\n\n"
+                "Проверьте ссылку и попробуйте снова."
+            )
+            bot.cleanup()
+            
     except Exception as e:
-        logger.error(f"Критическая ошибка при подключении к встрече: {e}")
-        await update.message.reply_text(f"❌ Произошла ошибка: {str(e)}")
+        logger.error(f"Критическая ошибка: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Произошла критическая ошибка:\n`{str(e)}`", parse_mode='Markdown')
         if bot:
             bot.cleanup()
+        if user_id in active_bots:
+            del active_bots[user_id]
+
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик нажатий на кнопки"""
     query = update.callback_query
     await query.answer()
     
-    if query.data == 'stop_recording':
-        bot = context.user_data.get('bot')
-        if bot and bot.recording:
-            bot.stop_recording()
-            await query.edit_message_text("⏸️ Запись остановлена. Начинаю транскрипцию...")
+    user_id = update.effective_user.id
+    bot = active_bots.get(user_id)
+    
+    if query.data == 'stop_and_transcribe':
+        if not bot:
+            await query.edit_message_text("❌ Нет активной встречи")
+            return
+        
+        await query.edit_message_text("⏹️ Останавливаю запись...")
+        
+        # Останавливаем запись
+        bot.stop_recording()
+        
+        await query.message.reply_text("🔄 Начинаю транскрипцию... Это может занять несколько минут.")
+        
+        # Транскрибируем
+        transcript = bot.transcribe_audio_whisper()
+        
+        if transcript and not transcript.startswith("Ошибка"):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"transcript_{timestamp}.txt"
             
-            # Транскрибируем
-            transcript = bot.transcribe_audio()
+            # Создаем полный отчет
+            report = (
+                f"ТРАНСКРИПТ ВСТРЕЧИ\n"
+                f"{'='*50}\n\n"
+                f"{bot.get_meeting_info()}\n"
+                f"{'='*50}\n\n"
+                f"{transcript}\n\n"
+                f"{'='*50}\n"
+                f"Создано: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            )
             
-            if transcript:
-                # Сохраняем в GitHub
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"transcript_{timestamp}.txt"
-                
-                if bot.save_to_github(transcript, filename):
-                    await query.message.reply_text(f"✅ Транскрипт сохранен в GitHub:\n`{filename}`", parse_mode='Markdown')
-                
-                # Отправляем транскрипт пользователю
-                await query.message.reply_document(
-                    document=transcript.encode('utf-8'),
-                    filename=filename,
-                    caption="📝 Транскрипт встречи"
+            # Сохраняем в GitHub
+            if bot.save_to_github(report, filename):
+                await query.message.reply_text(
+                    f"✅ Транскрипт сохранен в GitHub: `{filename}`",
+                    parse_mode='Markdown'
                 )
-            else:
-                await query.message.reply_text("❌ Не удалось создать транскрипт")
+            
+            # Отправляем файл пользователю
+            try:
+                # Сохраняем во временный файл
+                temp_file = os.path.join(RECORD_DIR, filename)
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    f.write(report)
+                
+                # Отправляем документ
+                with open(temp_file, 'rb') as f:
+                    await query.message.reply_document(
+                        document=f,
+                        filename=filename,
+                        caption="📝 Транскрипт встречи готов!"
+                    )
+                
+                # Удаляем временный файл
+                os.remove(temp_file)
+                
+            except Exception as e:
+                logger.error(f"Ошибка отправки файла: {e}")
+                # Отправляем как текст, если файл слишком большой
+                if len(report) < 4000:
+                    await query.message.reply_text(f"```\n{report}\n```", parse_mode='Markdown')
+                else:
+                    # Разбиваем на части
+                    parts = [report[i:i+4000] for i in range(0, len(report), 4000)]
+                    for i, part in enumerate(parts, 1):
+                        await query.message.reply_text(
+                            f"📝 Часть {i}/{len(parts)}:\n```\n{part}\n```",
+                            parse_mode='Markdown'
+                        )
+        else:
+            await query.message.reply_text(f"❌ {transcript or 'Не удалось создать транскрипт'}")
+        
+        # Очищаем ресурсы
+        bot.cleanup()
+        if user_id in active_bots:
+            del active_bots[user_id]
+        
+        await query.message.reply_text("✅ Встреча завершена. Отправьте новую ссылку для следующей встречи.")
     
     elif query.data == 'leave_meeting':
-        bot = context.user_data.get('bot')
-        if bot:
-            bot.cleanup()
-            context.user_data.clear()
-            await query.edit_message_text("👋 Покинул встречу")
+        if not bot:
+            await query.edit_message_text("❌ Нет активной встречи")
+            return
+        
+        bot.cleanup()
+        if user_id in active_bots:
+            del active_bots[user_id]
+        
+        await query.edit_message_text("👋 Покинул встречу. Запись остановлена.")
     
     elif query.data == 'status':
-        bot = context.user_data.get('bot')
         if bot and bot.recording:
-            await query.edit_message_text("🟢 Бот активен и записывает встречу")
+            info = bot.get_meeting_info()
+            await query.message.reply_text(f"🟢 *Статус: Активен*\n\n{info}", parse_mode='Markdown')
         else:
-            await query.edit_message_text("🔴 Бот не активен")
+            await query.message.reply_text("🔴 *Статус: Неактивен*\n\nНет активных встреч", parse_mode='Markdown')
+    
+    elif query.data == 'help':
+        await help_command(query, context)
+
 
 def main():
     """Главная функция"""
     if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN не установлен!")
-        return
+        logger.error("❌ TELEGRAM_BOT_TOKEN не установлен!")
+        sys.exit(1)
+    
+    logger.info("🤖 Запуск Meeting Bot...")
+    logger.info(f"📁 Директория записей: {RECORD_DIR}")
+    logger.info(f"🎤 Модель Whisper: {WHISPER_MODEL}")
+    logger.info(f"⏱️ Таймаут встречи: {MEETING_TIMEOUT_MIN} минут")
+    
+    # Проверяем наличие необходимых инструментов
+    try:
+        subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+        logger.info("✅ ffmpeg найден")
+    except:
+        logger.error("❌ ffmpeg не найден! Установите: apt-get install ffmpeg")
+    
+    try:
+        subprocess.run(['google-chrome', '--version'], capture_output=True, check=True)
+        logger.info("✅ Google Chrome найден")
+    except:
+        logger.warning("⚠️ Google Chrome не найден, проверяю Chromium...")
+        try:
+            subprocess.run(['chromium', '--version'], capture_output=True, check=True)
+            logger.info("✅ Chromium найден")
+        except:
+            logger.error("❌ Chrome/Chromium не найден!")
     
     # Создаем приложение
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
     # Регистрируем обработчики
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("status", status_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_meeting_url))
     application.add_handler(CallbackQueryHandler(button_callback))
     
     # Запускаем бота
-    logger.info("Бот запущен...")
-    application.run_polling()
+    logger.info("✅ Meeting Bot запущен и готов к работе!")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("👋 Бот остановлен пользователем")
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка: {e}", exc_info=True)
+        sys.exit(1)
