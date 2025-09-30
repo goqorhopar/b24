@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Meeting Bot - Автоматический бот для участия во встречах
+Meeting Bot - Исправленная версия для участия во встречах
 """
 
 import os
@@ -54,8 +54,12 @@ class MeetingBot:
         self.recording = False
         self.audio_file = None
         self.transcript = []
-        self.github = Github(GITHUB_TOKEN)
-        self.repo = self.github.get_repo(GITHUB_REPO)
+        if GITHUB_TOKEN:
+            self.github = Github(GITHUB_TOKEN)
+            self.repo = self.github.get_repo(GITHUB_REPO)
+        else:
+            self.github = None
+            self.repo = None
         
     def setup_driver(self, headless=True):
         """Настройка Chrome драйвера"""
@@ -384,6 +388,10 @@ class MeetingBot:
     def save_to_github(self, content: str, filename: str):
         """Сохранить транскрипт в GitHub"""
         try:
+            if not self.repo:
+                logger.warning("GitHub репозиторий не настроен")
+                return False
+                
             path = f"transcripts/{filename}"
             
             # Проверяем существует ли файл
@@ -561,6 +569,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     """Главная функция"""
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN не установлен!")
+        return
+    
     # Создаем приложение
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     

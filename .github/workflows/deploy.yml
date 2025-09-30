@@ -65,7 +65,7 @@ jobs:
           
           # Настраиваем права
           chown -R bot:bot /opt/meeting-bot
-          chmod +x /opt/meeting-bot/meeting-bot-main.py
+          chmod +x /opt/meeting-bot/meeting-bot.py
           
           # Запускаем бота
           systemctl start meeting-bot.service
