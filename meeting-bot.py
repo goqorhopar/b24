@@ -46,15 +46,18 @@ from load_auth_data import get_auth_loader
 
 # Конфигурация
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN', '')
 GITHUB_REPO = os.getenv('GITHUB_REPO', 'goqorhopar/b24')
 WHISPER_MODEL = os.getenv('WHISPER_MODEL', 'medium')
-RECORD_DIR = os.getenv('RECORD_DIR', '/tmp/recordings')
+RECORD_DIR = os.getenv('RECORD_DIR', '/opt/meeting-bot/recordings')
 MEETING_TIMEOUT_MIN = int(os.getenv('MEETING_TIMEOUT_MIN', '180'))  # 3 часа по умолчанию
+CHROME_PROFILE_DIR = os.getenv('CHROME_PROFILE_DIR', '/opt/meeting-bot/chrome-profile')
 
-# Создаем директорию для записей
+# Директории
 Path(RECORD_DIR).mkdir(parents=True, exist_ok=True)
+Path(CHROME_PROFILE_DIR).mkdir(parents=True, exist_ok=True)
 
 # Настройка логирования
 logging.basicConfig(
@@ -165,16 +168,14 @@ class MeetingBot:
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
 
-        # Уникальный user-data-dir для каждого запуска
-        import tempfile
-        unique_profile_dir = tempfile.mkdtemp(prefix="meetingbot_chrome_profile_")
-        options.add_argument(f'--user-data-dir={unique_profile_dir}')
+        # Постоянный профиль для сохранения авторизации платформ
+        options.add_argument(f'--user-data-dir={CHROME_PROFILE_DIR}')
 
         # Инициализация драйвера
         try:
             self.driver = webdriver.Chrome(options=options)
             self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            logger.info(f"Chrome драйвер инициализирован с профилем: {unique_profile_dir}")
+            logger.info(f"Chrome драйвер инициализирован с профилем: {CHROME_PROFILE_DIR}")
 
             # Применяем сохраненные данные авторизации
             auth_status = self.auth_loader.get_auth_status()
@@ -194,6 +195,32 @@ class MeetingBot:
         except Exception as e:
             logger.error(f"Ошибка инициализации Chrome: {e}")
             raise
+
+    def safe_get(self, url: str, retries: int = 2) -> bool:
+        """Безопасная загрузка URL с перезапуском драйвера при краше вкладки"""
+        for attempt in range(1, retries + 1):
+            try:
+                self.driver.get(url)
+                time.sleep(3)
+                return True
+            except WebDriverException as e:
+                msg = str(e).lower()
+                if 'tab crashed' in msg or 'disconnected' in msg or 'chrome not reachable' in msg:
+                    logger.error(f"Краш вкладки/сессии при загрузке URL: {e}. Попытка {attempt}/{retries}")
+                    try:
+                        self.driver.quit()
+                    except Exception:
+                        pass
+                    # Реинициализация драйвера
+                    self.setup_driver(headless=True)
+                    continue
+                else:
+                    logger.error(f"WebDriverException: {e}")
+                    return False
+            except Exception as e:
+                logger.error(f"Ошибка загрузки URL: {e}")
+                return False
+        return False
         
     def detect_meeting_type(self, url: str) -> str:
         """Определить тип встречи по URL"""
@@ -215,8 +242,9 @@ class MeetingBot:
         """Присоединиться к Google Meet с улучшенной логикой"""
         try:
             logger.info(f"Открываем Google Meet: {meeting_url}")
-            self.driver.get(meeting_url)
             self.meeting_url = meeting_url
+            if not self.safe_get(meeting_url, retries=2):
+                return False
             
             # Ждем загрузки страницы
             time.sleep(10)  # Увеличено с 8 до 10 секунд
@@ -343,19 +371,12 @@ class MeetingBot:
                 return True
             else:
                 logger.warning("⚠️ Не удалось присоединиться к встрече")
-                # Сохраняем скриншот для диагностики
-                try:
-                    screenshot_path = f"/tmp/meetingbot_googlemeet_fail_{int(time.time())}.png"
-                    self.driver.save_screenshot(screenshot_path)
-                    logger.warning(f"Скриншот ошибки сохранен: {screenshot_path}")
-                    # Отправка скриншота админу
-                    self._send_screenshot_to_admin(screenshot_path, meeting_url)
-                except Exception as err:
-                    logger.error(f"Ошибка сохранения скриншота: {err}")
+                self._capture_and_notify("googlemeet")
                 return False
                 
         except Exception as e:
             logger.error(f"❌ Ошибка при присоединении к Google Meet: {e}")
+            self._capture_and_notify("googlemeet")
             return False
     
     def _disable_media_in_meeting(self):
@@ -435,8 +456,9 @@ class MeetingBot:
                 logger.info(f"Попробуем URL: {web_url}")
                 meeting_url = web_url
             
-            self.driver.get(meeting_url)
             self.meeting_url = meeting_url
+            if not self.safe_get(meeting_url, retries=2):
+                return False
             time.sleep(5)
             
             # Обрабатываем cookie-баннер
@@ -794,6 +816,7 @@ class MeetingBot:
                 except Exception as restart_error:
                     logger.error(f"Не удалось перезапустить драйвер: {restart_error}")
             
+            self._capture_and_notify("zoom")
             return False
     
     def _disable_zoom_media(self):
@@ -856,8 +879,9 @@ class MeetingBot:
         """Присоединиться к Яндекс Телемост"""
         try:
             logger.info(f"Открываем Яндекс Телемост: {meeting_url}")
-            self.driver.get(meeting_url)
             self.meeting_url = meeting_url
+            if not self.safe_get(meeting_url, retries=2):
+                return False
             time.sleep(5)
             
             # Вводим имя
@@ -918,14 +942,16 @@ class MeetingBot:
                 
         except Exception as e:
             logger.error(f"❌ Ошибка при присоединении к Яндекс Телемост: {e}")
+            self._capture_and_notify("yandex")
             return False
     
     def join_contour_talk(self, meeting_url: str, name: str = "Meeting Bot"):
         """Присоединиться к Контур.Толк"""
         try:
             logger.info(f"Открываем Контур.Толк: {meeting_url}")
-            self.driver.get(meeting_url)
             self.meeting_url = meeting_url
+            if not self.safe_get(meeting_url, retries=2):
+                return False
             time.sleep(5)
             # Вводим имя если требуется
             try:
@@ -966,6 +992,7 @@ class MeetingBot:
             return False
         except Exception as e:
             logger.error(f"❌ Ошибка при присоединении к Контур.Толк: {e}")
+            self._capture_and_notify("contour")
             return False
     def _verify_real_meeting_connection(self) -> bool:
         """Проверить, что бот действительно подключен к встрече"""
@@ -1134,6 +1161,15 @@ class MeetingBot:
         except Exception as e:
             logger.error(f"Ошибка отправки скриншота админу: {e}")
             return False
+
+    def _capture_and_notify(self, platform_tag: str):
+        try:
+            screenshot_path = f"/tmp/meetingbot_{platform_tag}_fail_{int(time.time())}.png"
+            self.driver.save_screenshot(screenshot_path)
+            logger.warning(f"Скриншот ошибки сохранен: {screenshot_path}")
+            self._send_screenshot_to_admin(screenshot_path, self.meeting_url or "")
+        except Exception as err:
+            logger.error(f"Ошибка сохранения скриншота: {err}")
     
     def start_recording(self):
         """Начать запись аудио через ffmpeg на всю встречу"""
@@ -1427,7 +1463,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     welcome_text = (
-        "🤖 *Meeting Bot v2.2* - Автоматическое участие во встречах\n\n"
+        "🤖 *Meeting Bot v3.0* - Автоматическое участие во встречах\n\n"
         "✅ *ИСПРАВЛЕНО: Запись на всю встречу (НЕ 3 минуты!)*\n"
         "✅ *ИСПРАВЛЕНО: Улучшено присоединение к встречам*\n\n"
         "📝 *Поддерживаемые платформы:*\n"
@@ -1705,7 +1741,7 @@ def main():
         logger.error("❌ TELEGRAM_BOT_TOKEN не установлен!")
         sys.exit(1)
     
-    logger.info("🤖 Запуск Meeting Bot v2.2...")
+    logger.info("🤖 Запуск Meeting Bot v3.0...")
     logger.info("✅ ИСПРАВЛЕНО: Запись на всю встречу (НЕ 3 минуты!)")
     logger.info("✅ ИСПРАВЛЕНО: Улучшено присоединение к встречам")
     logger.info(f"📁 Директория записей: {RECORD_DIR}")
