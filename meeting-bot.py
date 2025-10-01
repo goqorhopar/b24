@@ -377,28 +377,134 @@ class MeetingBot:
             
             # Если это ссылка вида zoom.us/j/123456789
             if '/j/' in meeting_url:
-                # Добавляем параметр для веб-клиента
+                # Добавляем параметры для веб-клиента
                 if '?' in meeting_url:
-                    meeting_url += '&web=1'
+                    meeting_url += '&web=1&un=0'
                 else:
-                    meeting_url += '?web=1'
+                    meeting_url += '?web=1&un=0'
             
             self.driver.get(meeting_url)
             self.meeting_url = meeting_url
-            time.sleep(8)  # Увеличиваем время ожидания
+            time.sleep(5)
+            
+            # Обрабатываем cookie-баннер
+            try:
+                cookie_accept = self.driver.find_element(By.XPATH, "//button[contains(text(), 'ACCEPT COOKIES') or contains(text(), 'Accept')]")
+                if cookie_accept.is_displayed():
+                    cookie_accept.click()
+                    logger.info("Приняты cookies")
+                    time.sleep(2)
+            except Exception as e:
+                logger.debug(f"Cookie-баннер не найден: {e}")
+            
+            # Закрываем всплывающие окна
+            try:
+                close_buttons = self.driver.find_elements(By.XPATH, "//button[@aria-label='Close'] | //button[contains(@class, 'close')] | //*[contains(@class, 'close')]")
+                for btn in close_buttons:
+                    if btn.is_displayed():
+                        btn.click()
+                        logger.info("Закрыто всплывающее окно")
+                        time.sleep(1)
+            except Exception as e:
+                logger.debug(f"Всплывающие окна не найдены: {e}")
             
             # Ищем кнопку "Join from Browser" / "Launch Meeting"
             try:
-                web_join_buttons = self.driver.find_elements(By.XPATH, 
-                    "//a[contains(text(), 'Join from Browser') or contains(text(), 'Launch Meeting') or contains(text(), 'browser')]")
-                for btn in web_join_buttons:
-                    if btn.is_displayed():
-                        btn.click()
-                        logger.info("Нажата кнопка входа через браузер")
-                        time.sleep(5)
+                web_join_selectors = [
+                    "//a[contains(text(), 'Join from Browser')]",
+                    "//button[contains(text(), 'Join from Browser')]",
+                    "//a[contains(text(), 'Launch Meeting')]",
+                    "//button[contains(text(), 'Launch Meeting')]",
+                    "//a[contains(text(), 'browser')]",
+                    "//button[contains(text(), 'browser')]",
+                    "//a[contains(@href, 'web')]",
+                    "//button[contains(@class, 'web')]"
+                ]
+                
+                for selector in web_join_selectors:
+                    try:
+                        elements = self.driver.find_elements(By.XPATH, selector)
+                        for btn in elements:
+                            if btn.is_displayed() and btn.is_enabled():
+                                btn.click()
+                                logger.info(f"Нажата кнопка входа через браузер: {selector}")
+                                time.sleep(5)
+                                break
+                        else:
+                            continue
                         break
+                    except Exception as e:
+                        logger.debug(f"Селектор {selector} не сработал: {e}")
             except Exception as e:
                 logger.debug(f"Кнопка входа через браузер не найдена: {e}")
+            
+            # Если не удалось найти кнопку входа через браузер, попробуем альтернативный способ
+            try:
+                # Проверяем, не пытается ли Zoom открыть десктопное приложение
+                current_url = self.driver.current_url
+                if 'zoom.us/j/' in current_url and 'web=1' not in current_url:
+                    # Перезагружаем страницу с параметром web=1
+                    if '?' in current_url:
+                        new_url = current_url + '&web=1&un=0'
+                    else:
+                        new_url = current_url + '?web=1&un=0'
+                    
+                    logger.info(f"Перезагружаем с веб-клиентом: {new_url}")
+                    self.driver.get(new_url)
+                    time.sleep(5)
+                    
+                    # Снова обрабатываем cookie-баннер
+                    try:
+                        cookie_accept = self.driver.find_element(By.XPATH, "//button[contains(text(), 'ACCEPT COOKIES') or contains(text(), 'Accept')]")
+                        if cookie_accept.is_displayed():
+                            cookie_accept.click()
+                            logger.info("Приняты cookies (повторно)")
+                            time.sleep(2)
+                    except:
+                        pass
+                
+                # Проверяем, попали ли мы на страницу успеха (#success)
+                elif '#success' in current_url:
+                    logger.info("Попали на страницу успеха, ищем кнопку входа в встречу")
+                    
+                    # Ищем кнопки для входа в встречу после успешной авторизации
+                    meeting_join_selectors = [
+                        "//button[contains(text(), 'Join Meeting')]",
+                        "//a[contains(text(), 'Join Meeting')]",
+                        "//button[contains(text(), 'Enter Meeting')]",
+                        "//a[contains(text(), 'Enter Meeting')]",
+                        "//button[contains(text(), 'Join')]",
+                        "//a[contains(text(), 'Join')]",
+                        "//button[contains(@class, 'join')]",
+                        "//a[contains(@class, 'join')]",
+                        "//button[contains(@id, 'join')]",
+                        "//a[contains(@id, 'join')]",
+                    ]
+                    
+                    for selector in meeting_join_selectors:
+                        try:
+                            elements = self.driver.find_elements(By.XPATH, selector)
+                            for btn in elements:
+                                if btn.is_displayed() and btn.is_enabled():
+                                    btn.click()
+                                    logger.info(f"Нажата кнопка входа в встречу: {selector}")
+                                    time.sleep(5)
+                                    break
+                            else:
+                                continue
+                            break
+                        except Exception as e:
+                            logger.debug(f"Селектор {selector} не сработал: {e}")
+                    
+                    # Если не нашли кнопку, попробуем перезагрузить страницу без #success
+                    if '#success' in self.driver.current_url:
+                        clean_url = current_url.split('#')[0]
+                        logger.info(f"Перезагружаем без #success: {clean_url}")
+                        self.driver.get(clean_url)
+                        time.sleep(5)
+                        
+            except Exception as e:
+                logger.debug(f"Альтернативный способ не сработал: {e}")
             
             # Вводим имя
             try:
@@ -484,10 +590,22 @@ class MeetingBot:
                 "//div[contains(@class, 'video-container')]",
                 "//button[contains(@aria-label, 'Mute')]",
                 "//button[contains(@aria-label, 'Unmute')]",
+                "//button[contains(@aria-label, 'Turn off')]",
+                "//button[contains(@aria-label, 'Turn on')]",
                 "//div[contains(@class, 'participants')]",
                 "//canvas",  # Видео элемент
                 "//div[contains(@class, 'meeting')]",
                 "//div[contains(@class, 'zoom')]",
+                "//div[contains(@class, 'webinar')]",
+                "//div[contains(@id, 'meeting')]",
+                "//div[contains(@id, 'zoom')]",
+                "//video",  # HTML5 видео элемент
+                "//audio",  # HTML5 аудио элемент
+                "//div[contains(@class, 'controls')]",
+                "//div[contains(@class, 'toolbar')]",
+                "//button[contains(@class, 'zm-btn')]",
+                "//div[contains(@class, 'footer')]",
+                "//div[contains(@class, 'main')]",
             ]
             
             in_meeting = False
@@ -509,6 +627,10 @@ class MeetingBot:
                 "//div[contains(text(), 'Meeting has ended')]",
                 "//div[contains(text(), 'Please wait for the host')]",
                 "//div[contains(text(), 'Waiting for host')]",
+                "//div[contains(text(), 'Please download and install')]",
+                "//div[contains(text(), 'Did not open Zoom')]",
+                "//div[contains(text(), 'Zoom Workplace app')]",
+                "//div[contains(text(), 'Download Now')]",
             ]
             
             has_error = False
@@ -523,7 +645,12 @@ class MeetingBot:
                     pass
             
             # Проверяем URL - должны быть в активной встрече Zoom
-            url_check = "zoom.us" in current_url and ("/j/" in current_url or "/meeting/" in current_url)
+            url_check = (
+                "zoom.us" in current_url and 
+                ("/j/" in current_url or "/meeting/" in current_url or "/web/" in current_url) and
+                "web=1" in current_url and  # Должны быть в веб-клиенте
+                "#success" not in current_url  # НЕ должны быть на странице успеха
+            )
             
             # Итоговая проверка
             connection_success = (
