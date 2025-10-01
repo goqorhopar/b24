@@ -686,13 +686,30 @@ class MeetingBot:
                 "zoom.us" in current_url and 
                 ("/j/" in current_url or "/meeting/" in current_url or "/web/" in current_url) and
                 "web=1" in current_url and  # Должны быть в веб-клиенте
-                "#success" not in current_url  # НЕ должны быть на странице успеха
+                "#success" not in current_url and  # НЕ должны быть на странице успеха
+                "/wc/" not in current_url  # НЕ должны быть на странице веб-клиента (это не сама встреча)
             )
             
-            # Итоговая проверка
+            # Строгая проверка - должны быть активные медиа элементы
+            has_active_media = False
+            try:
+                # Проверяем наличие активных видео/аудио потоков
+                media_elements = self.driver.find_elements(By.CSS_SELECTOR, "video, audio")
+                for element in media_elements:
+                    try:
+                        # Проверяем, что элемент активен
+                        if element.get_attribute('src') or element.get_attribute('currentSrc'):
+                            has_active_media = True
+                            logger.info("Найден активный медиа элемент")
+                            break
+                    except:
+                        continue
+            except Exception as e:
+                logger.debug(f"Ошибка проверки медиа элементов: {e}")
+            
+            # Итоговая проверка - ДОЛЖНЫ быть активные медиа элементы
             connection_success = (
-                (in_meeting and found_indicators >= 2) or 
-                (join_clicked and url_check and not has_error)
+                in_meeting and found_indicators >= 3 and has_active_media and not has_error
             )
             
             if connection_success:
@@ -900,6 +917,11 @@ class MeetingBot:
             meeting_platforms = ['meet.google.com', 'zoom.us', 'telemost.yandex', 'talk.contour.ru']
             in_meeting_platform = any(platform in current_url for platform in meeting_platforms)
             
+            # Дополнительная проверка для Zoom - НЕ должны быть на странице веб-клиента
+            if 'zoom.us' in current_url and '/wc/' in current_url:
+                logger.warning("Находимся на странице веб-клиента Zoom, а не в самой встрече")
+                return False
+            
             if not in_meeting_platform:
                 logger.warning("Не находимся на платформе встречи")
                 return False
@@ -972,12 +994,12 @@ class MeetingBot:
                 except:
                     continue
             
-            # Итоговая проверка
+            # Строгая проверка - ДОЛЖНЫ быть активные медиа элементы
             is_real_meeting = (
                 in_meeting_platform and 
-                found_indicators >= 2 and 
-                not has_error and
-                (has_active_media or found_indicators >= 3)  # Либо есть активные медиа, либо много индикаторов
+                found_indicators >= 3 and 
+                has_active_media and  # ОБЯЗАТЕЛЬНО должны быть активные медиа
+                not has_error
             )
             
             logger.info(f"Результат проверки: платформа={in_meeting_platform}, индикаторы={found_indicators}, медиа={has_active_media}, ошибки={has_error}")
