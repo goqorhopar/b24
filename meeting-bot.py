@@ -272,6 +272,8 @@ class MeetingBot:
                     screenshot_path = f"/tmp/meetingbot_googlemeet_fail_{int(time.time())}.png"
                     self.driver.save_screenshot(screenshot_path)
                     logger.warning(f"Скриншот ошибки сохранен: {screenshot_path}")
+                    # Отправка скриншота админу
+                    self._send_screenshot_to_admin(screenshot_path, meeting_url)
                 except Exception as err:
                     logger.error(f"Ошибка сохранения скриншота: {err}")
                 return False
@@ -467,6 +469,7 @@ class MeetingBot:
                     screenshot_path = f"/tmp/meetingbot_zoom_fail_{int(time.time())}.png"
                     self.driver.save_screenshot(screenshot_path)
                     logger.warning(f"Скриншот ошибки сохранен: {screenshot_path}")
+                    self._send_screenshot_to_admin(screenshot_path, meeting_url)
                 except Exception as err:
                     logger.error(f"Ошибка сохранения скриншота: {err}")
                 return False
@@ -590,6 +593,7 @@ class MeetingBot:
                     screenshot_path = f"/tmp/meetingbot_yandex_fail_{int(time.time())}.png"
                     self.driver.save_screenshot(screenshot_path)
                     logger.warning(f"Скриншот ошибки сохранен: {screenshot_path}")
+                    self._send_screenshot_to_admin(screenshot_path, meeting_url)
                 except Exception as err:
                     logger.error(f"Ошибка сохранения скриншота: {err}")
                 return False
@@ -645,8 +649,32 @@ class MeetingBot:
                 screenshot_path = f"/tmp/meetingbot_contour_fail_{int(time.time())}.png"
                 self.driver.save_screenshot(screenshot_path)
                 logger.warning(f"Скриншот ошибки сохранен: {screenshot_path}")
+                self._send_screenshot_to_admin(screenshot_path, meeting_url)
             except Exception as err:
                 logger.error(f"Ошибка сохранения скриншота: {err}")
+    def _send_screenshot_to_admin(self, screenshot_path, meeting_url):
+        """Отправить скриншот ошибки админу в Telegram"""
+        import requests
+        ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', '')
+        TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+        if not (ADMIN_CHAT_ID and TELEGRAM_BOT_TOKEN):
+            logger.warning("ADMIN_CHAT_ID или TELEGRAM_BOT_TOKEN не заданы для отправки скриншота")
+            return
+        try:
+            with open(screenshot_path, 'rb') as img:
+                files = {'photo': img}
+                caption = f"❌ Meeting Bot не смог подключиться к встрече!\nURL: {meeting_url}"
+                url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+                resp = requests.post(url, data={
+                    'chat_id': ADMIN_CHAT_ID,
+                    'caption': caption
+                }, files=files)
+                if resp.status_code == 200:
+                    logger.info("Скриншот ошибки отправлен админу в Telegram")
+                else:
+                    logger.error(f"Ошибка отправки скриншота админу: {resp.text}")
+        except Exception as e:
+            logger.error(f"Ошибка отправки скриншота админу: {e}")
             return False
     
     def start_recording(self):
