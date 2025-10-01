@@ -481,6 +481,7 @@ class MeetingBot:
                         "//a[contains(@id, 'join')]",
                     ]
                     
+                    button_found = False
                     for selector in meeting_join_selectors:
                         try:
                             elements = self.driver.find_elements(By.XPATH, selector)
@@ -489,19 +490,55 @@ class MeetingBot:
                                     btn.click()
                                     logger.info(f"Нажата кнопка входа в встречу: {selector}")
                                     time.sleep(5)
+                                    button_found = True
                                     break
-                            else:
-                                continue
-                            break
+                            if button_found:
+                                break
                         except Exception as e:
                             logger.debug(f"Селектор {selector} не сработал: {e}")
                     
-                    # Если не нашли кнопку, попробуем перезагрузить страницу без #success
-                    if '#success' in self.driver.current_url:
-                        clean_url = current_url.split('#')[0]
-                        logger.info(f"Перезагружаем без #success: {clean_url}")
-                        self.driver.get(clean_url)
-                        time.sleep(5)
+                    # Если не нашли кнопку, попробуем принудительно перейти в веб-клиент
+                    if not button_found and '#success' in self.driver.current_url:
+                        # Извлекаем ID встречи из URL
+                        meeting_id = None
+                        if '/j/' in current_url:
+                            meeting_id = current_url.split('/j/')[1].split('?')[0]
+                        
+                        if meeting_id:
+                            # Создаем прямую ссылку на веб-клиент
+                            web_client_url = f"https://us05web.zoom.us/wc/{meeting_id}/join"
+                            logger.info(f"Попытка прямого входа в веб-клиент: {web_client_url}")
+                            self.driver.get(web_client_url)
+                            time.sleep(5)
+                            
+                            # Если и это не сработало, попробуем JavaScript
+                            if '#success' in self.driver.current_url or 'zoom.us/j/' in self.driver.current_url:
+                                logger.info("Попытка принудительного входа через JavaScript")
+                                try:
+                                    # Пытаемся найти и нажать любую кнопку входа
+                                    js_script = """
+                                    var buttons = document.querySelectorAll('button, a');
+                                    for (var i = 0; i < buttons.length; i++) {
+                                        var btn = buttons[i];
+                                        var text = btn.textContent.toLowerCase();
+                                        if (text.includes('join') || text.includes('enter') || text.includes('войти')) {
+                                            btn.click();
+                                            return 'clicked';
+                                        }
+                                    }
+                                    return 'not found';
+                                    """
+                                    result = self.driver.execute_script(js_script)
+                                    logger.info(f"JavaScript результат: {result}")
+                                    time.sleep(3)
+                                except Exception as e:
+                                    logger.debug(f"JavaScript не сработал: {e}")
+                        else:
+                            # Fallback - перезагружаем без #success
+                            clean_url = current_url.split('#')[0]
+                            logger.info(f"Перезагружаем без #success: {clean_url}")
+                            self.driver.get(clean_url)
+                            time.sleep(5)
                         
             except Exception as e:
                 logger.debug(f"Альтернативный способ не сработал: {e}")
