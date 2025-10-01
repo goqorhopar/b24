@@ -957,81 +957,40 @@ async def handle_meeting_url(update: Update, context: ContextTypes.DEFAULT_TYPE)
             bot.cleanup()
         if user_id in active_bots:
             del active_bots[user_id]
-                        except Exception as e:
-                            await status_msg.edit_text(f"❌ Ошибка инициализации браузера: {e}")
-                            return
-                        meeting_names = {
-                            'google_meet': 'Google Meet',
-                            'zoom': 'Zoom',
-                            'yandex': 'Яндекс Телемост',
-                            'contour': 'Контур.Толк'
-                        }
-                        await status_msg.edit_text("🎯 **Встреча обнаружена!**\n\n🔗 **URL:** " + url + "\n\n🚀 **Начинаю обработку...**\n⏳ Подключаюсь к " + meeting_names.get(meeting_type, 'встрече') + "...")
-                        success = False
-                        error_reason = ""
-                        try:
-                            if meeting_type == 'google_meet':
-                                success = bot.join_google_meet(url)
-                            elif meeting_type == 'zoom':
-                                success = bot.join_zoom_meeting(url)
-                            elif meeting_type == 'yandex':
-                                success = bot.join_yandex_telemost(url)
-                            elif meeting_type == 'contour':
-                                success = bot.join_contour_talk(url)
-                        except Exception as e:
-                            error_reason = f"Ошибка подключения: {e}"
-                            success = False
-                        if success:
-                            await status_msg.edit_text("🎯 **Встреча обнаружена!**\n\n🔗 **URL:** " + url + "\n\n🚀 **Начинаю обработку...**\n✅ Успешно подключился к встрече!")
-                            # Начинаем запись
-                            await update.message.reply_text("🎙️ Записываю аудио всей встречи...")
-                            if bot.start_recording():
-                                # Сохраняем бота в активные
-                                active_bots[user_id] = bot
-                                # Отправляем информацию и кнопки управления
-                                info = bot.get_meeting_info()
-                                keyboard = [
-                                    [InlineKeyboardButton("⏹️ Остановить и получить транскрипт", callback_data='stop_and_transcribe')],
-                                    [InlineKeyboardButton("🚪 Покинуть встречу", callback_data='leave_meeting')],
-                                    [InlineKeyboardButton("📊 Статус", callback_data='status')]
-                                ]
-                                reply_markup = InlineKeyboardMarkup(keyboard)
-                                await update.message.reply_text(
-                                    f"✅ *Запись началась!*\n\n{info}\n\n"
-                                    f"Используйте кнопки ниже для управления:",
-                                    parse_mode='Markdown',
-                                    reply_markup=reply_markup
-                                )
-                            else:
-                                await update.message.reply_text(
-                                    "⚠️ Подключился к встрече, но не удалось начать запись.\n"
-                                    "Возможные причины:\n"
-                                    "• PulseAudio/ALSA не настроен на сервере\n"
-                                    "• Нет прав доступа к аудио устройствам\n"
-                                    "• ffmpeg не может записывать с устройства"
-                                )
-                                bot.cleanup()
-                                if user_id in active_bots:
-                                    del active_bots[user_id]
-                        else:
-                            error_text = (
-                                "❌ Не удалось подключиться к встрече.\n\n"
-                                "Возможные причины:\n"
-                                "• Встреча требует авторизации\n"
-                                "• Неверная ссылка\n"
-                                "• Встреча еще не началась\n"
-                            )
-                            if error_reason:
-                                error_text += f"\nПричина: {error_reason}"
-                            await status_msg.edit_text(error_text)
-                            bot.cleanup()
-                    except Exception as e:
-                        logger.error(f"Критическая ошибка: {e}", exc_info=True)
-                        await update.message.reply_text(f"❌ Произошла критическая ошибка:\n`{str(e)}`", parse_mode='Markdown')
-                        if bot:
-                            bot.cleanup()
-                        if user_id in active_bots:
-                            del active_bots[user_id]
+
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик нажатий на кнопки"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    bot = active_bots.get(user_id)
+    
+    if query.data == 'stop_and_transcribe':
+        if not bot:
+            await query.edit_message_text("❌ Нет активной встречи")
+            return
+        
+        # Останавливаем запись
+        bot.stop_recording()
+        
+        # Создаем транскрипт
+        await query.edit_message_text("🎙️ Создаю транскрипт...")
+        transcript = bot.transcribe_audio_whisper()
+        
+        if transcript:
+            # Создаем отчет
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"transcript_{timestamp}.txt"
+            
+            report = f"📝 Транскрипт встречи\n"
+            report += f"📅 Дата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            report += f"🔗 URL: {bot.meeting_url}\n"
+            report += f"⏱️ Длительность: {bot.get_meeting_info()}\n\n"
+            report += "=" * 50 + "\n\n"
+            report += transcript
+            
             # Сохраняем в GitHub
             if bot.save_to_github(report, filename):
                 await query.message.reply_text(
