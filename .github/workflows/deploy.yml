@@ -1,4 +1,4 @@
-name: Deploy Meeting Bot
+name: Deploy Meeting Bot to VPS
 
 on:
   push:
@@ -11,40 +11,104 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       
-    - name: Setup Python
-      uses: actions/setup-python@v4
+    - name: Deploy to VPS
+      uses: appleboy/ssh-action@v1.0.3
       with:
-        python-version: '3.9'
-        
-    - name: Install dependencies
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USERNAME }}
+        password: ${{ secrets.VPS_PASSWORD }}
+        script: |
+          echo "🚀 Начинаю развертывание Meeting Bot..."
+          
+          # Переходим в рабочую директорию
+          cd /opt/meeting-bot || exit 1
+          
+          # Останавливаем бот
+          echo "⏸️  Останавливаю бота..."
+          systemctl stop meeting-bot.service 2>/dev/null || true
+          
+          # Сохраняем текущий .env файл
+          if [ -f .env ]; then
+            cp .env .env.backup
+            echo "💾 .env файл сохранен"
+          fi
+          
+          # Обновляем код
+          echo "📥 Обновляю код из репозитория..."
+          git fetch origin
+          git reset --hard origin/main
+          
+          # Восстанавливаем .env если он был
+          if [ -f .env.backup ]; then
+            mv .env.backup .env
+            echo "✅ .env файл восстановлен"
+          fi
+          
+          # Активируем виртуальное окружение
+          source venv/bin/activate
+          
+          # Обновляем зависимости
+          echo "📦 Обновляю зависимости..."
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          
+          # Проверяем .env файл
+          if [ ! -f .env ] || ! grep -q "TELEGRAM_BOT_TOKEN" .env; then
+            echo "⚠️  Создаю .env файл из секретов..."
+            cat > .env << 'ENV_EOF'
+          # Telegram
+          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
+          
+          # GitHub
+          GITHUB_TOKEN=${{ secrets.REPO_TOKEN }}
+          GITHUB_REPO=${{ secrets.REPO_NAME }}
+          
+          # Bot Settings
+          BOT_NAME=MeetingBot
+          RECORD_DIR=/opt/meeting-bot/recordings
+          WHISPER_MODEL=medium
+          MEETING_TIMEOUT_MIN=180
+          ENV_EOF
+            echo "✅ .env файл создан из секретов"
+          fi
+          
+          # Создаем директорию для записей
+          mkdir -p recordings
+          
+          # Настраиваем права доступа
+          echo "🔐 Настраиваю права доступа..."
+          chown -R bot:bot /opt/meeting-bot
+          chmod +x meeting-bot.py
+          chmod 600 .env
+          
+          # Перезагружаем systemd
+          systemctl daemon-reload
+          
+          # Запускаем бота
+          echo "🚀 Запускаю бота..."
+          systemctl start meeting-bot.service
+          
+          # Ждем запуска
+          sleep 10
+          
+          # Проверяем статус
+          echo "📊 Проверяю статус бота..."
+          systemctl status meeting-bot.service --no-pager
+          
+          # Проверяем логи на ошибки
+          echo "📋 Последние логи:"
+          journalctl -u meeting-bot.service --no-pager -n 20
+          
+          echo "✅ Развертывание завершено!"
+          
+    - name: Notify deployment status
+      if: always()
       run: |
-        pip install -r requirements.txt
-        
-    - name: Setup Chrome
-      run: |
-        wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-        echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
-        sudo apt update
-        sudo apt install -y google-chrome-stable
-        
-    - name: Deploy to server
-      env:
-        SERVER_HOST: ${{ secrets.SERVER_HOST }}
-        SERVER_USER: ${{ secrets.SERVER_USER }}
-        SERVER_KEY: ${{ secrets.SERVER_KEY }}
-      run: |
-        # Создаем SSH ключ
-        echo "$SERVER_KEY" > server_key
-        chmod 600 server_key
-        
-        # Копируем код на сервер
-        scp -i server_key -o StrictHostKeyChecking=no -r . $SERVER_USER@$SERVER_HOST:/opt/meeting-bot/
-        
-        # Запускаем бота на сервере
-        ssh -i server_key -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST "
-          cd /opt/meeting-bot
-          pip3 install -r requirements.txt
-          python3 meeting-bot.py
-        "
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "✅ Деплой успешно завершен!"
+        else
+          echo "❌ Деплой завершился с ошибкой!"
+        fi
