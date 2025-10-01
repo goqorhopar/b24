@@ -337,7 +337,7 @@ class MeetingBot:
             
             self.driver.get(meeting_url)
             self.meeting_url = meeting_url
-            time.sleep(5)
+            time.sleep(8)  # Увеличиваем время ожидания
             
             # Ищем кнопку "Join from Browser" / "Launch Meeting"
             try:
@@ -347,48 +347,178 @@ class MeetingBot:
                     if btn.is_displayed():
                         btn.click()
                         logger.info("Нажата кнопка входа через браузер")
-                        time.sleep(3)
+                        time.sleep(5)
                         break
             except Exception as e:
                 logger.debug(f"Кнопка входа через браузер не найдена: {e}")
             
             # Вводим имя
             try:
-                name_input = WebDriverWait(self.driver, 10).until(
+                name_input = WebDriverWait(self.driver, 15).until(
                     EC.presence_of_element_located((By.ID, "inputname"))
                 )
                 name_input.clear()
                 name_input.send_keys(name)
                 logger.info(f"Введено имя: {name}")
+                time.sleep(2)
             except Exception as e:
                 logger.debug(f"Не удалось ввести имя: {e}")
             
             # Ищем и нажимаем кнопку Join
-            try:
-                join_button = WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.ID, "joinBtn"))
-                )
-                join_button.click()
-                logger.info("Нажата кнопка Join")
-                time.sleep(3)
-            except Exception as e:
-                logger.warning(f"Стандартная кнопка Join не найдена: {e}")
-                # Ищем альтернативные кнопки
-                join_buttons = self.driver.find_elements(By.XPATH, "//button[contains(., 'Join')]")
-                for btn in join_buttons:
-                    try:
-                        btn.click()
-                        logger.info("Нажата альтернативная кнопка Join")
+            join_clicked = False
+            
+            # Список всех возможных селекторов для кнопки Join
+            join_selectors = [
+                ('id', 'joinBtn'),
+                ('css', 'button[data-tooltip="Join Meeting"]'),
+                ('css', 'button[aria-label="Join Meeting"]'),
+                ('css', 'button[aria-label="Join"]'),
+                ('css', 'button[data-tooltip="Join"]'),
+                ('css', '.zm-btn--primary'),
+                ('css', '.join-btn'),
+                ('css', 'button[class*="join"]'),
+                ('xpath', "//button[contains(text(), 'Join')]"),
+                ('xpath', "//button[contains(text(), 'Join Meeting')]"),
+                ('xpath', "//button[contains(text(), 'Войти')]"),
+                ('xpath', "//button[contains(text(), 'Присоединиться')]"),
+                ('xpath', "//a[contains(text(), 'Join')]"),
+                ('xpath', "//a[contains(text(), 'Join Meeting')]"),
+            ]
+            
+            for method, selector in join_selectors:
+                try:
+                    if method == 'id':
+                        elements = self.driver.find_elements(By.ID, selector)
+                    elif method == 'css':
+                        elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    else:  # xpath
+                        elements = self.driver.find_elements(By.XPATH, selector)
+                    
+                    for btn in elements:
+                        if btn.is_displayed() and btn.is_enabled():
+                            btn.click()
+                            logger.info(f"Нажата кнопка Join через {method}: {selector}")
+                            join_clicked = True
+                            time.sleep(5)
+                            break
+                    if join_clicked:
                         break
+                except Exception as e:
+                    logger.debug(f"Попытка {method} {selector}: {e}")
+            
+            if not join_clicked:
+                logger.warning("Не удалось найти кнопку Join ни одним способом")
+                # Последняя попытка - ищем любые кнопки
+                all_buttons = self.driver.find_elements(By.TAG_NAME, "button")
+                for btn in all_buttons:
+                    try:
+                        text = btn.text.lower()
+                        if any(word in text for word in ['join', 'войти', 'присоединиться', 'enter']):
+                            if btn.is_displayed() and btn.is_enabled():
+                                btn.click()
+                                logger.info(f"Нажата кнопка по тексту: {btn.text}")
+                                join_clicked = True
+                                time.sleep(5)
+                                break
                     except:
                         pass
             
-            logger.info(f"✅ Подключились к Zoom: {meeting_url}")
-            return True
+            # Ждем загрузки встречи и проверяем, что мы действительно в ней
+            time.sleep(10)
+            
+            # Проверяем, что мы в активной встрече
+            current_url = self.driver.current_url
+            logger.info(f"Текущий URL после присоединения: {current_url}")
+            
+            # Ищем индикаторы того, что мы в активной встрече
+            meeting_indicators = [
+                "//div[contains(@class, 'meeting-client')]",
+                "//div[contains(@class, 'video-container')]",
+                "//button[contains(@aria-label, 'Mute')]",
+                "//button[contains(@aria-label, 'Unmute')]",
+                "//div[contains(@class, 'participants')]",
+                "//canvas",  # Видео элемент
+            ]
+            
+            in_meeting = False
+            for indicator in meeting_indicators:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, indicator)
+                    if elements:
+                        logger.info(f"Найден индикатор встречи: {indicator}")
+                        in_meeting = True
+                        break
+                except:
+                    pass
+            
+            if in_meeting or join_clicked:
+                logger.info(f"✅ Подключились к Zoom: {meeting_url}")
+                # Отключаем камеру и микрофон
+                self._disable_zoom_media()
+                return True
+            else:
+                logger.warning("⚠️ Не удалось подтвердить присоединение к встрече")
+                return False
             
         except Exception as e:
             logger.error(f"❌ Ошибка при присоединении к Zoom: {e}")
             return False
+    
+    def _disable_zoom_media(self):
+        """Отключить камеру и микрофон в Zoom"""
+        try:
+            time.sleep(3)  # Ждем загрузки элементов управления
+            
+            # Отключаем микрофон
+            mic_selectors = [
+                "button[aria-label*='Mute' i]",
+                "button[aria-label*='Unmute' i]",
+                "button[data-tooltip*='Mute' i]",
+                "button[data-tooltip*='Unmute' i]",
+                ".zm-btn--mute",
+                ".zm-btn--unmute"
+            ]
+            
+            for selector in mic_selectors:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    for el in elements:
+                        if el.is_displayed():
+                            aria_label = el.get_attribute('aria-label') or ''
+                            if 'unmute' in aria_label.lower() or 'mute' in aria_label.lower():
+                                el.click()
+                                logger.info("Микрофон отключен в Zoom")
+                                time.sleep(1)
+                                break
+                except Exception as e:
+                    logger.debug(f"Попытка отключить микрофон через {selector}: {e}")
+            
+            # Отключаем камеру
+            camera_selectors = [
+                "button[aria-label*='Stop Video' i]",
+                "button[aria-label*='Start Video' i]",
+                "button[data-tooltip*='Stop Video' i]",
+                "button[data-tooltip*='Start Video' i]",
+                ".zm-btn--video",
+                ".zm-btn--stop-video"
+            ]
+            
+            for selector in camera_selectors:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    for el in elements:
+                        if el.is_displayed():
+                            aria_label = el.get_attribute('aria-label') or ''
+                            if 'start video' in aria_label.lower() or 'stop video' in aria_label.lower():
+                                el.click()
+                                logger.info("Камера отключена в Zoom")
+                                time.sleep(1)
+                                break
+                except Exception as e:
+                    logger.debug(f"Попытка отключить камеру через {selector}: {e}")
+                    
+        except Exception as e:
+            logger.debug(f"Ошибка при отключении медиа в Zoom: {e}")
     
     def join_yandex_telemost(self, meeting_url: str, name: str = "Meeting Bot"):
         """Присоединиться к Яндекс Телемост"""
@@ -506,9 +636,12 @@ class MeetingBot:
             # Пытаемся разные источники аудио для Linux VPS
             # Убираем ограничение по времени - записываем до остановки
             audio_sources = [
+                ['ffmpeg', '-f', 'alsa', '-i', 'hw:0,0', '-ac', '2', '-ar', '16000', '-y', self.audio_file],
+                ['ffmpeg', '-f', 'alsa', '-i', 'hw:0,1', '-ac', '2', '-ar', '16000', '-y', self.audio_file],
+                ['ffmpeg', '-f', 'alsa', '-i', 'plughw:0,0', '-ac', '2', '-ar', '16000', '-y', self.audio_file],
+                ['ffmpeg', '-f', 'alsa', '-i', 'plughw:0,1', '-ac', '2', '-ar', '16000', '-y', self.audio_file],
                 ['ffmpeg', '-f', 'pulse', '-i', 'default', '-ac', '2', '-ar', '16000', '-y', self.audio_file],
                 ['ffmpeg', '-f', 'alsa', '-i', 'default', '-ac', '2', '-ar', '16000', '-y', self.audio_file],
-                ['ffmpeg', '-f', 'pulse', '-i', 'alsa_output.pci-0000_00_1f.3.analog-stereo.monitor', '-ac', '2', '-ar', '16000', '-y', self.audio_file],
             ]
             
             for cmd in audio_sources:
@@ -882,7 +1015,7 @@ async def handle_meeting_url(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         # Настраиваем драйвер
         await status_msg.edit_text("🎯 **Встреча обнаружена!**\n\n🔗 **URL:** " + url + "\n\n🚀 **Начинаю обработку...**\n⏳ Инициализация браузера...")
-        bot.setup_driver(headless=True)
+        bot.setup_driver(headless=False)
         
         # Подключаемся к встрече
         meeting_names = {
