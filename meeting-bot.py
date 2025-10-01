@@ -106,7 +106,7 @@ class MeetingBot:
     def setup_driver(self, headless=True):
         """Настройка Chrome драйвера для VPS"""
         options = Options()
-        
+
         # Критичные настройки для headless режима
         if headless:
             options.add_argument('--headless=new')
@@ -115,20 +115,20 @@ class MeetingBot:
             options.add_argument('--disable-gpu')
             options.add_argument('--disable-software-rasterizer')
             options.add_argument('--disable-extensions')
-        
+
         # Настройки для медиа
         options.add_argument('--use-fake-ui-for-media-stream')
         options.add_argument('--use-fake-device-for-media-stream')
         options.add_argument('--autoplay-policy=no-user-gesture-required')
         options.add_argument('--disable-blink-features=AutomationControlled')
-        
+
         # Размер окна
         options.add_argument('--window-size=1920,1080')
         options.add_argument('--start-maximized')
-        
+
         # User agent
         options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        
+
         # Разрешения для микрофона и камеры
         prefs = {
             "profile.default_content_setting_values.media_stream_mic": 1,
@@ -139,22 +139,27 @@ class MeetingBot:
         options.add_experimental_option("prefs", prefs)
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
-        
+
+        # Уникальный user-data-dir для каждого запуска
+        import tempfile
+        unique_profile_dir = tempfile.mkdtemp(prefix="meetingbot_chrome_profile_")
+        options.add_argument(f'--user-data-dir={unique_profile_dir}')
+
         # Инициализация драйвера
         try:
             self.driver = webdriver.Chrome(options=options)
             self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            logger.info("Chrome драйвер инициализирован")
-            
+            logger.info(f"Chrome драйвер инициализирован с профилем: {unique_profile_dir}")
+
             # Применяем сохраненные данные авторизации
             auth_status = self.auth_loader.get_auth_status()
             logger.info(f"Статус авторизации: {auth_status}")
-            
+
             if self.auth_loader.setup_authenticated_driver(self.driver):
                 logger.info("✅ Драйвер настроен с авторизацией")
             else:
                 logger.warning("⚠️ Авторизация не применена - возможны проблемы с закрытыми встречами")
-                
+
         except Exception as e:
             logger.error(f"Ошибка инициализации Chrome: {e}")
             raise
@@ -177,7 +182,7 @@ class MeetingBot:
     
     def join_google_meet(self, meeting_url: str, name: str = "Meeting Bot"):
         """Присоединиться к Google Meet с улучшенной логикой"""
-    try:
+        try:
             logger.info(f"Открываем Google Meet: {meeting_url}")
             self.driver.get(meeting_url)
             self.meeting_url = meeting_url
@@ -609,7 +614,6 @@ class MeetingBot:
             self.driver.get(meeting_url)
             self.meeting_url = meeting_url
             time.sleep(5)
-            
             # Вводим имя если требуется
             try:
                 name_inputs = self.driver.find_elements(By.CSS_SELECTOR, "input[type='text'], input[type='name']")
@@ -621,14 +625,12 @@ class MeetingBot:
                         break
             except Exception as e:
                 logger.debug(f"Поле имени не найдено: {e}")
-            
             # Ищем кнопку подключения
             join_patterns = [
-                ('xpath', "//button[contains(., 'Подключиться')]"),
-                ('xpath', "//button[contains(., 'Войти')]"),
-                ('xpath', "//button[contains(., 'Join')]"),
+                ('xpath', "//button[contains(., 'Подключиться')]") ,
+                ('xpath', "//button[contains(., 'Войти')]") ,
+                ('xpath', "//button[contains(., 'Join')]") ,
             ]
-            
             for method, selector in join_patterns:
                 try:
                     buttons = self.driver.find_elements(By.XPATH, selector)
@@ -640,10 +642,6 @@ class MeetingBot:
                             return True
                 except:
                     pass
-            
-            logger.info(f"✅ Подключились к Контур.Толк: {meeting_url}")
-            return True
-        else:
             logger.warning("⚠️ Не удалось подключиться к Контур.Толк")
             try:
                 screenshot_path = f"/tmp/meetingbot_contour_fail_{int(time.time())}.png"
@@ -652,6 +650,10 @@ class MeetingBot:
                 self._send_screenshot_to_admin(screenshot_path, meeting_url)
             except Exception as err:
                 logger.error(f"Ошибка сохранения скриншота: {err}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Ошибка при присоединении к Контур.Толк: {e}")
+            return False
     def _send_screenshot_to_admin(self, screenshot_path, meeting_url):
         """Отправить скриншот ошибки админу в Telegram"""
         import requests
