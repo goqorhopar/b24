@@ -115,6 +115,31 @@ class MeetingBot:
             options.add_argument('--disable-gpu')
             options.add_argument('--disable-software-rasterizer')
             options.add_argument('--disable-extensions')
+            
+        # КРИТИЧНЫЕ настройки для предотвращения падения Chrome
+        options.add_argument('--memory-pressure-off')
+        options.add_argument('--max_old_space_size=4096')
+        options.add_argument('--disable-background-networking')
+        options.add_argument('--disable-background-timer-throttling')
+        options.add_argument('--disable-renderer-backgrounding')
+        options.add_argument('--disable-backgrounding-occluded-windows')
+        options.add_argument('--disable-client-side-phishing-detection')
+        options.add_argument('--disable-component-extensions-with-background-pages')
+        options.add_argument('--disable-domain-reliability')
+        options.add_argument('--disable-features=TranslateUI')
+        options.add_argument('--disable-hang-monitor')
+        options.add_argument('--disable-ipc-flooding-protection')
+        options.add_argument('--disable-popup-blocking')
+        options.add_argument('--disable-prompt-on-repost')
+        options.add_argument('--disable-sync')
+        options.add_argument('--disable-web-resources')
+        options.add_argument('--enable-features=NetworkService,NetworkServiceLogging')
+        options.add_argument('--force-color-profile=srgb')
+        options.add_argument('--metrics-recording-only')
+        options.add_argument('--safebrowsing-disable-auto-update')
+        options.add_argument('--enable-automation')
+        options.add_argument('--password-store=basic')
+        options.add_argument('--use-mock-keychain')
 
         # Настройки для медиа
         options.add_argument('--use-fake-ui-for-media-stream')
@@ -755,6 +780,20 @@ class MeetingBot:
             
         except Exception as e:
             logger.error(f"❌ Ошибка при присоединении к Zoom: {e}")
+            
+            # Если Chrome упал, попробуем перезапустить драйвер
+            if "tab crashed" in str(e) or "chrome not reachable" in str(e).lower():
+                logger.warning("Chrome упал, пытаемся перезапустить драйвер...")
+                try:
+                    if self.driver:
+                        self.driver.quit()
+                    time.sleep(5)
+                    if self.setup_driver(headless=True):
+                        logger.info("Драйвер перезапущен, повторяем попытку...")
+                        return self.join_zoom_meeting(meeting_url, name)
+                except Exception as restart_error:
+                    logger.error(f"Не удалось перезапустить драйвер: {restart_error}")
+            
             return False
     
     def _disable_zoom_media(self):
