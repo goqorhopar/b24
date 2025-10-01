@@ -927,11 +927,36 @@ async def handle_meeting_url(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     f"✅ *Запись началась!*\n\n{info}\n\n"
                     f"Используйте кнопки ниже для управления:",
                     parse_mode='Markdown',
-                    try:
-                        # Настраиваем драйвер
-                        await status_msg.edit_text("🎯 **Встреча обнаружена!**\n\n🔗 **URL:** " + url + "\n\n🚀 **Начинаю обработку...**\n⏳ Инициализация браузера...")
-                        try:
-                            bot.setup_driver(headless=True)
+                    reply_markup=reply_markup
+                )
+            else:
+                await update.message.reply_text(
+                    "⚠️ Подключился к встрече, но не удалось начать запись.\n"
+                    "Возможные причины:\n"
+                    "• PulseAudio/ALSA не настроен на сервере\n"
+                    "• Нет прав доступа к аудио устройствам\n"
+                    "• ffmpeg не может записывать с устройства"
+                )
+                bot.cleanup()
+                if user_id in active_bots:
+                    del active_bots[user_id]
+        else:
+            error_text = (
+                "❌ Не удалось подключиться к встрече.\n\n"
+                "Возможные причины:\n"
+                "• Встреча требует авторизации\n"
+                "• Неверная ссылка\n"
+                "• Встреча еще не началась\n"
+            )
+            await status_msg.edit_text(error_text)
+            bot.cleanup()
+    except Exception as e:
+        logger.error(f"Критическая ошибка: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Произошла критическая ошибка:\n`{str(e)}`", parse_mode='Markdown')
+        if bot:
+            bot.cleanup()
+        if user_id in active_bots:
+            del active_bots[user_id]
                         except Exception as e:
                             await status_msg.edit_text(f"❌ Ошибка инициализации браузера: {e}")
                             return
