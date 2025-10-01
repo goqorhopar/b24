@@ -177,7 +177,7 @@ class MeetingBot:
     
     def join_google_meet(self, meeting_url: str, name: str = "Meeting Bot"):
         """Присоединиться к Google Meet с улучшенной логикой"""
-        try:
+    try:
             logger.info(f"Открываем Google Meet: {meeting_url}")
             self.driver.get(meeting_url)
             self.meeting_url = meeting_url
@@ -263,11 +263,17 @@ class MeetingBot:
             time.sleep(3)
             if "meet.google.com" in self.driver.current_url:
                 logger.info(f"✅ Успешно присоединились к Google Meet: {meeting_url}")
-                # Отключаем камеру и микрофон
                 self._disable_media_in_meeting()
                 return True
             else:
                 logger.warning("⚠️ Не удалось присоединиться к встрече")
+                # Сохраняем скриншот для диагностики
+                try:
+                    screenshot_path = f"/tmp/meetingbot_googlemeet_fail_{int(time.time())}.png"
+                    self.driver.save_screenshot(screenshot_path)
+                    logger.warning(f"Скриншот ошибки сохранен: {screenshot_path}")
+                except Exception as err:
+                    logger.error(f"Ошибка сохранения скриншота: {err}")
                 return False
                 
         except Exception as e:
@@ -453,11 +459,16 @@ class MeetingBot:
             
             if in_meeting or join_clicked:
                 logger.info(f"✅ Подключились к Zoom: {meeting_url}")
-                # Отключаем камеру и микрофон
                 self._disable_zoom_media()
                 return True
             else:
                 logger.warning("⚠️ Не удалось подтвердить присоединение к встрече")
+                try:
+                    screenshot_path = f"/tmp/meetingbot_zoom_fail_{int(time.time())}.png"
+                    self.driver.save_screenshot(screenshot_path)
+                    logger.warning(f"Скриншот ошибки сохранен: {screenshot_path}")
+                except Exception as err:
+                    logger.error(f"Ошибка сохранения скриншота: {err}")
                 return False
             
         except Exception as e:
@@ -575,6 +586,12 @@ class MeetingBot:
                 return True
             else:
                 logger.warning("⚠️ Не удалось найти кнопку входа")
+                try:
+                    screenshot_path = f"/tmp/meetingbot_yandex_fail_{int(time.time())}.png"
+                    self.driver.save_screenshot(screenshot_path)
+                    logger.warning(f"Скриншот ошибки сохранен: {screenshot_path}")
+                except Exception as err:
+                    logger.error(f"Ошибка сохранения скриншота: {err}")
                 return False
                 
         except Exception as e:
@@ -622,9 +639,14 @@ class MeetingBot:
             
             logger.info(f"✅ Подключились к Контур.Толк: {meeting_url}")
             return True
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка при присоединении к Контур.Толк: {e}")
+        else:
+            logger.warning("⚠️ Не удалось подключиться к Контур.Толк")
+            try:
+                screenshot_path = f"/tmp/meetingbot_contour_fail_{int(time.time())}.png"
+                self.driver.save_screenshot(screenshot_path)
+                logger.warning(f"Скриншот ошибки сохранен: {screenshot_path}")
+            except Exception as err:
+                logger.error(f"Ошибка сохранения скриншота: {err}")
             return False
     
     def start_recording(self):
@@ -1049,46 +1071,70 @@ async def handle_meeting_url(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 
                 # Отправляем информацию и кнопки управления
                 info = bot.get_meeting_info()
-                keyboard = [
-                    [InlineKeyboardButton("⏹️ Остановить и получить транскрипт", callback_data='stop_and_transcribe')],
-                    [InlineKeyboardButton("🚪 Покинуть встречу", callback_data='leave_meeting')],
-                    [InlineKeyboardButton("📊 Статус", callback_data='status')]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await update.message.reply_text(
-                    f"✅ *Запись началась!*\n\n{info}\n\n"
-                    f"Используйте кнопки ниже для управления:",
-                    parse_mode='Markdown',
-                    reply_markup=reply_markup
-                )
-            else:
-                await update.message.reply_text(
-                    "⚠️ Подключился к встрече, но не удалось начать запись.\n"
-                    "Возможные причины:\n"
-                    "• PulseAudio/ALSA не настроен на сервере\n"
-                    "• Нет прав доступа к аудио устройствам\n"
-                    "• ffmpeg не может записывать с устройства"
-                )
-                bot.cleanup()
-                if user_id in active_bots:
-                    del active_bots[user_id]
-        else:
-            error_text = (
-                "❌ Не удалось подключиться к встрече.\n\n"
-                "Возможные причины:\n"
-                "• Встреча требует авторизации\n"
-                "• Неверная ссылка\n"
-                "• Встреча еще не началась\n"
-            )
-            await status_msg.edit_text(error_text)
-            bot.cleanup()
-    except Exception as e:
-        logger.error(f"Критическая ошибка: {e}", exc_info=True)
-        await update.message.reply_text(f"❌ Произошла критическая ошибка:\n`{str(e)}`", parse_mode='Markdown')
-        if bot:
-            bot.cleanup()
-        if user_id in active_bots:
+                success = False
+                if meeting_type == 'google_meet':
+                    success = bot.join_google_meet(url)
+                elif meeting_type == 'zoom':
+                    success = bot.join_zoom_meeting(url)
+                elif meeting_type == 'yandex':
+                    success = bot.join_yandex_telemost(url)
+                elif meeting_type == 'contour':
+                    success = bot.join_contour_talk(url)
+
+                if success:
+                    # Дополнительная проверка: реально ли бот в встрече (например, по наличию аудио/видео элементов)
+                    # Можно добавить более строгую проверку через Selenium, например:
+                    in_real_meeting = False
+                    try:
+                        # Пример для Google Meet: ищем элемент с классом "video-stream" или "audio" (можно доработать для других платформ)
+                        elements = bot.driver.find_elements(By.CSS_SELECTOR, "video,audio")
+                        if elements:
+                            in_real_meeting = True
+                    except Exception as e:
+                        logger.warning(f"Проверка реального подключения: {e}")
+
+                    if in_real_meeting:
+                        await status_msg.edit_text("🎯 **Встреча обнаружена!**\n\n🔗 **URL:** " + url + "\n\n🚀 **Начинаю обработку...**\n✅ Успешно подключился к встрече!")
+                        await update.message.reply_text("🎙️ Записываю аудио встречи...")
+                        if bot.start_recording():
+                            active_bots[user_id] = bot
+                            info = bot.get_meeting_info()
+                            keyboard = [
+                                #...
+                            ]
+                            await update.message.reply_text(info, reply_markup=InlineKeyboardMarkup(keyboard))
+                            bot.start_meeting_monitoring()
+                        else:
+                            await update.message.reply_text("❌ Не удалось начать запись аудио!")
+                            bot.cleanup()
+                    else:
+                        # Не в реальной встрече — отправляем админу уведомление и не начинаем запись
+                        await status_msg.edit_text("❌ Бот не смог реально подключиться к встрече!\n\nВозможна имитация. Запись не начата.")
+                        import requests
+                        ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', '')
+                        TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+                        if ADMIN_CHAT_ID and TELEGRAM_BOT_TOKEN:
+                            msg = f"❌ Meeting Bot: имитация подключения!\n\nURL: {url}"
+                            url_api = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+                            try:
+                                requests.post(url_api, data={
+                                    'chat_id': ADMIN_CHAT_ID,
+                                    'text': msg,
+                                    'parse_mode': 'Markdown'
+                                })
+                            except Exception as err:
+                                logger.error(f"Ошибка отправки Telegram уведомления админу: {err}")
+                        bot.cleanup()
+                else:
+                    error_text = (
+                        "❌ Не удалось подключиться к встрече.\n\n"
+                        "Возможные причины:\n"
+                        "• Встреча требует авторизации\n"
+                        "• Неверная ссылка\n"
+                        "• Встреча еще не началась\n"
+                    )
+                    await status_msg.edit_text(error_text)
+                    bot.cleanup()
             del active_bots[user_id]
 
 
@@ -1247,4 +1293,19 @@ if __name__ == '__main__':
         logger.info("👋 Бот остановлен пользователем")
     except Exception as e:
         logger.error(f"❌ Критическая ошибка: {e}", exc_info=True)
+        # Отправка уведомления админу в Telegram
+        import requests
+        ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', '')
+        TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+        if ADMIN_CHAT_ID and TELEGRAM_BOT_TOKEN:
+            msg = f"❌ Meeting Bot упал!\n\nОшибка: {e}"
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            try:
+                requests.post(url, data={
+                    'chat_id': ADMIN_CHAT_ID,
+                    'text': msg,
+                    'parse_mode': 'Markdown'
+                })
+            except Exception as err:
+                logger.error(f"Ошибка отправки Telegram уведомления админу: {err}")
         sys.exit(1)
