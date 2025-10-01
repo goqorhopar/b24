@@ -1,0 +1,26 @@
+[Unit]
+Description=Meeting Bot - Telegram Bot for Meeting Recording
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/b24
+Environment=PATH=/usr/bin:/usr/local/bin
+Environment=PYTHONPATH=/root/b24
+ExecStart=/usr/bin/python3 /root/b24/meeting-bot.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Переменные окружения
+EnvironmentFile=/root/b24/.env
+
+# Ограничения ресурсов
+MemoryMax=2G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

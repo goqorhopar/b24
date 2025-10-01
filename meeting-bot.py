@@ -155,10 +155,16 @@ class MeetingBot:
             auth_status = self.auth_loader.get_auth_status()
             logger.info(f"Статус авторизации: {auth_status}")
 
-            if self.auth_loader.setup_authenticated_driver(self.driver):
-                logger.info("✅ Драйвер настроен с авторизацией")
+            # Применяем авторизацию только если файлы существуют
+            auth_files = self.auth_loader.check_auth_files_exist()
+            if any(auth_files.values()):
+                if self.auth_loader.setup_authenticated_driver(self.driver):
+                    logger.info("✅ Драйвер настроен с авторизацией")
+                else:
+                    logger.warning("⚠️ Не удалось применить авторизацию")
             else:
-                logger.warning("⚠️ Авторизация не применена - возможны проблемы с закрытыми встречами")
+                logger.warning("⚠️ Файлы авторизации не найдены - возможны проблемы с закрытыми встречами")
+                logger.info("💡 Запустите: python simple_auth.py для настройки авторизации")
 
         except Exception as e:
             logger.error(f"Ошибка инициализации Chrome: {e}")
@@ -265,8 +271,37 @@ class MeetingBot:
                             pass
             
             # Проверяем, удалось ли присоединиться
-            time.sleep(3)
+            time.sleep(5)  # Увеличиваем время ожидания
+            
+            # Проверяем несколько индикаторов успешного подключения
+            connection_success = False
+            
+            # 1. Проверяем URL
             if "meet.google.com" in self.driver.current_url:
+                logger.info("URL указывает на Google Meet")
+                connection_success = True
+            
+            # 2. Проверяем наличие элементов встречи
+            try:
+                meeting_elements = self.driver.find_elements(By.CSS_SELECTOR, 
+                    "div[jsname='BOHaEe'], div[data-is-muted], button[aria-label*='camera'], button[aria-label*='microphone']")
+                if meeting_elements:
+                    logger.info(f"Найдены элементы управления встречей: {len(meeting_elements)}")
+                    connection_success = True
+            except Exception as e:
+                logger.debug(f"Ошибка поиска элементов встречи: {e}")
+            
+            # 3. Проверяем, что нет сообщений об ошибке
+            try:
+                error_messages = self.driver.find_elements(By.XPATH, 
+                    "//div[contains(text(), 'Unable to join') or contains(text(), 'Meeting not found') or contains(text(), 'Access denied')]")
+                if error_messages:
+                    logger.warning("Найдены сообщения об ошибке подключения")
+                    connection_success = False
+            except Exception as e:
+                logger.debug(f"Ошибка проверки сообщений об ошибке: {e}")
+            
+            if connection_success:
                 logger.info(f"✅ Успешно присоединились к Google Meet: {meeting_url}")
                 self._disable_media_in_meeting()
                 return True
@@ -451,25 +486,58 @@ class MeetingBot:
                 "//button[contains(@aria-label, 'Unmute')]",
                 "//div[contains(@class, 'participants')]",
                 "//canvas",  # Видео элемент
+                "//div[contains(@class, 'meeting')]",
+                "//div[contains(@class, 'zoom')]",
             ]
             
             in_meeting = False
+            found_indicators = 0
             for indicator in meeting_indicators:
                 try:
                     elements = self.driver.find_elements(By.XPATH, indicator)
                     if elements:
-                        logger.info(f"Найден индикатор встречи: {indicator}")
+                        logger.info(f"Найден индикатор встречи: {indicator} ({len(elements)} элементов)")
+                        found_indicators += 1
                         in_meeting = True
+                except:
+                    pass
+            
+            # Дополнительная проверка - ищем сообщения об ошибке
+            error_indicators = [
+                "//div[contains(text(), 'Meeting not found')]",
+                "//div[contains(text(), 'Invalid meeting ID')]",
+                "//div[contains(text(), 'Meeting has ended')]",
+                "//div[contains(text(), 'Please wait for the host')]",
+                "//div[contains(text(), 'Waiting for host')]",
+            ]
+            
+            has_error = False
+            for indicator in error_indicators:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, indicator)
+                    if elements:
+                        logger.warning(f"Найдено сообщение об ошибке: {indicator}")
+                        has_error = True
                         break
                 except:
                     pass
             
-            if in_meeting or join_clicked:
+            # Проверяем URL - должны быть в активной встрече Zoom
+            url_check = "zoom.us" in current_url and ("/j/" in current_url or "/meeting/" in current_url)
+            
+            # Итоговая проверка
+            connection_success = (
+                (in_meeting and found_indicators >= 2) or 
+                (join_clicked and url_check and not has_error)
+            )
+            
+            if connection_success:
                 logger.info(f"✅ Подключились к Zoom: {meeting_url}")
                 self._disable_zoom_media()
                 return True
             else:
                 logger.warning("⚠️ Не удалось подтвердить присоединение к встрече")
+                logger.info(f"Результат проверки: индикаторы={found_indicators}, ошибки={has_error}, URL={url_check}")
                 try:
                     screenshot_path = f"/tmp/meetingbot_zoom_fail_{int(time.time())}.png"
                     self.driver.save_screenshot(screenshot_path)
@@ -654,6 +722,145 @@ class MeetingBot:
         except Exception as e:
             logger.error(f"❌ Ошибка при присоединении к Контур.Толк: {e}")
             return False
+    def _verify_real_meeting_connection(self) -> bool:
+        """Проверить, что бот действительно подключен к встрече"""
+        try:
+            if not self.driver:
+                logger.warning("Драйвер не инициализирован")
+                return False
+            
+            current_url = self.driver.current_url
+            logger.info(f"Проверка реального подключения. URL: {current_url}")
+            
+            # Проверяем URL - должны быть в активной встрече
+            meeting_platforms = ['meet.google.com', 'zoom.us', 'telemost.yandex', 'talk.contour.ru']
+            in_meeting_platform = any(platform in current_url for platform in meeting_platforms)
+            
+            if not in_meeting_platform:
+                logger.warning("Не находимся на платформе встречи")
+                return False
+            
+            # Ищем индикаторы активной встречи
+            meeting_indicators = [
+                # Google Meet
+                "video[src*='blob:']",  # Видео поток
+                "audio[src*='blob:']",  # Аудио поток
+                "div[jsname='BOHaEe']",  # Кнопки управления
+                "div[data-is-muted]",  # Индикаторы состояния
+                
+                # Zoom
+                "canvas",  # Видео элемент
+                "div[class*='meeting-client']",  # Клиент встречи
+                "button[aria-label*='Mute']",  # Кнопки управления
+                
+                # Общие
+                "video",  # Любое видео
+                "audio",  # Любой аудио
+                "div[class*='participant']",  # Участники
+                "div[class*='meeting']",  # Элементы встречи
+            ]
+            
+            found_indicators = 0
+            for indicator in meeting_indicators:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, indicator)
+                    if elements:
+                        found_indicators += 1
+                        logger.info(f"Найден индикатор встречи: {indicator} ({len(elements)} элементов)")
+                except Exception as e:
+                    logger.debug(f"Ошибка поиска индикатора {indicator}: {e}")
+            
+            # Проверяем, что есть активные медиа элементы
+            has_active_media = False
+            try:
+                # Проверяем наличие активных видео/аудио потоков
+                media_elements = self.driver.find_elements(By.CSS_SELECTOR, "video, audio")
+                for element in media_elements:
+                    try:
+                        # Проверяем, что элемент активен
+                        if element.get_attribute('src') or element.get_attribute('currentSrc'):
+                            has_active_media = True
+                            logger.info("Найден активный медиа элемент")
+                            break
+                    except:
+                        continue
+            except Exception as e:
+                logger.debug(f"Ошибка проверки медиа элементов: {e}")
+            
+            # Проверяем, что нет сообщений об ошибке или ожидании
+            error_indicators = [
+                "//div[contains(text(), 'Waiting for host')]",
+                "//div[contains(text(), 'Meeting not started')]",
+                "//div[contains(text(), 'Please wait')]",
+                "//div[contains(text(), 'Ожидание')]",
+                "//div[contains(text(), 'Встреча не началась')]",
+                "//div[contains(text(), 'Пожалуйста, подождите')]",
+            ]
+            
+            has_error = False
+            for indicator in error_indicators:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, indicator)
+                    if elements:
+                        has_error = True
+                        logger.warning(f"Найдено сообщение об ошибке: {indicator}")
+                        break
+                except:
+                    continue
+            
+            # Итоговая проверка
+            is_real_meeting = (
+                in_meeting_platform and 
+                found_indicators >= 2 and 
+                not has_error and
+                (has_active_media or found_indicators >= 3)  # Либо есть активные медиа, либо много индикаторов
+            )
+            
+            logger.info(f"Результат проверки: платформа={in_meeting_platform}, индикаторы={found_indicators}, медиа={has_active_media}, ошибки={has_error}")
+            logger.info(f"Реальное подключение: {is_real_meeting}")
+            
+            return is_real_meeting
+            
+        except Exception as e:
+            logger.error(f"Ошибка проверки реального подключения: {e}")
+            return False
+    
+    def _send_imitation_alert(self, meeting_url: str):
+        """Отправить уведомление об имитации подключения"""
+        import requests
+        ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', '')
+        TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+        
+        if not (ADMIN_CHAT_ID and TELEGRAM_BOT_TOKEN):
+            logger.warning("ADMIN_CHAT_ID или TELEGRAM_BOT_TOKEN не заданы для отправки уведомления")
+            return
+        
+        try:
+            msg = f"🚨 **Meeting Bot: Имитация подключения!**\n\n"
+            msg += f"🔗 URL: {meeting_url}\n"
+            msg += f"⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            msg += "❌ Бот не смог реально подключиться к встрече.\n"
+            msg += "Возможные причины:\n"
+            msg += "• Требуется авторизация\n"
+            msg += "• Встреча еще не началась\n"
+            msg += "• Неверная ссылка\n"
+            msg += "• Проблемы с cookies"
+            
+            url_api = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            resp = requests.post(url_api, data={
+                'chat_id': ADMIN_CHAT_ID,
+                'text': msg,
+                'parse_mode': 'Markdown'
+            })
+            
+            if resp.status_code == 200:
+                logger.info("Уведомление об имитации отправлено админу")
+            else:
+                logger.error(f"Ошибка отправки уведомления: {resp.text}")
+                
+        except Exception as e:
+            logger.error(f"Ошибка отправки уведомления об имитации: {e}")
+    
     def _send_screenshot_to_admin(self, screenshot_path, meeting_url):
         """Отправить скриншот ошибки админу в Telegram"""
         import requests
@@ -1067,7 +1274,7 @@ async def handle_meeting_url(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         # Настраиваем драйвер
         await status_msg.edit_text("🎯 **Встреча обнаружена!**\n\n🔗 **URL:** " + url + "\n\n🚀 **Начинаю обработку...**\n⏳ Инициализация браузера...")
-        bot.setup_driver(headless=False)
+        bot.setup_driver(headless=True)  # Headless режим для сервера
         
         # Подключаемся к встрече
         meeting_names = {
@@ -1090,82 +1297,55 @@ async def handle_meeting_url(update: Update, context: ContextTypes.DEFAULT_TYPE)
             success = bot.join_contour_talk(url)
         
         if success:
-            await status_msg.edit_text("🎯 **Встреча обнаружена!**\n\n🔗 **URL:** " + url + "\n\n🚀 **Начинаю обработку...**\n✅ Успешно подключился к встрече!")
+            # Проверяем реальное подключение к встрече
+            in_real_meeting = bot._verify_real_meeting_connection()
             
-            # Начинаем запись
-            await update.message.reply_text("🎙️ Записываю аудио встречи...")
-            
-            if bot.start_recording():
-                # Сохраняем бота в активные
-                active_bots[user_id] = bot
+            if in_real_meeting:
+                await status_msg.edit_text("🎯 **Встреча обнаружена!**\n\n🔗 **URL:** " + url + "\n\n🚀 **Начинаю обработку...**\n✅ Успешно подключился к встрече!")
                 
-                # Отправляем информацию и кнопки управления
-                info = bot.get_meeting_info()
-                success = False
-                if meeting_type == 'google_meet':
-                    success = bot.join_google_meet(url)
-                elif meeting_type == 'zoom':
-                    success = bot.join_zoom_meeting(url)
-                elif meeting_type == 'yandex':
-                    success = bot.join_yandex_telemost(url)
-                elif meeting_type == 'contour':
-                    success = bot.join_contour_talk(url)
-
-                if success:
-                    # Дополнительная проверка: реально ли бот в встрече (например, по наличию аудио/видео элементов)
-                    # Можно добавить более строгую проверку через Selenium, например:
-                    in_real_meeting = False
-                    try:
-                        # Пример для Google Meet: ищем элемент с классом "video-stream" или "audio" (можно доработать для других платформ)
-                        elements = bot.driver.find_elements(By.CSS_SELECTOR, "video,audio")
-                        if elements:
-                            in_real_meeting = True
-                    except Exception as e:
-                        logger.warning(f"Проверка реального подключения: {e}")
-
-                    if in_real_meeting:
-                        await status_msg.edit_text("🎯 **Встреча обнаружена!**\n\n🔗 **URL:** " + url + "\n\n🚀 **Начинаю обработку...**\n✅ Успешно подключился к встрече!")
-                        await update.message.reply_text("🎙️ Записываю аудио встречи...")
-                        if bot.start_recording():
-                            active_bots[user_id] = bot
-                            info = bot.get_meeting_info()
-                            keyboard = [
-                                #...
-                            ]
-                            await update.message.reply_text(info, reply_markup=InlineKeyboardMarkup(keyboard))
-                            bot.start_meeting_monitoring()
-                        else:
-                            await update.message.reply_text("❌ Не удалось начать запись аудио!")
-                            bot.cleanup()
-                    else:
-                        # Не в реальной встрече — отправляем админу уведомление и не начинаем запись
-                        await status_msg.edit_text("❌ Бот не смог реально подключиться к встрече!\n\nВозможна имитация. Запись не начата.")
-                        import requests
-                        ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', '')
-                        TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
-                        if ADMIN_CHAT_ID and TELEGRAM_BOT_TOKEN:
-                            msg = f"❌ Meeting Bot: имитация подключения!\n\nURL: {url}"
-                            url_api = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-                            try:
-                                requests.post(url_api, data={
-                                    'chat_id': ADMIN_CHAT_ID,
-                                    'text': msg,
-                                    'parse_mode': 'Markdown'
-                                })
-                            except Exception as err:
-                                logger.error(f"Ошибка отправки Telegram уведомления админу: {err}")
-                        bot.cleanup()
+                # Начинаем запись
+                await update.message.reply_text("🎙️ Записываю аудио встречи...")
+                
+                if bot.start_recording():
+                    # Сохраняем бота в активные
+                    active_bots[user_id] = bot
+                    
+                    # Отправляем информацию и кнопки управления
+                    info = bot.get_meeting_info()
+                    keyboard = [
+                        [InlineKeyboardButton("⏹️ Остановить и транскрибировать", callback_data='stop_and_transcribe')],
+                        [InlineKeyboardButton("🚪 Покинуть встречу", callback_data='leave_meeting')],
+                        [InlineKeyboardButton("📊 Статус", callback_data='status')]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    await update.message.reply_text(info, reply_markup=reply_markup)
+                    
+                    # Запускаем мониторинг встречи
+                    bot.start_meeting_monitoring()
                 else:
-                    error_text = (
-                        "❌ Не удалось подключиться к встрече.\n\n"
-                        "Возможные причины:\n"
-                        "• Встреча требует авторизации\n"
-                        "• Неверная ссылка\n"
-                        "• Встреча еще не началась\n"
-                    )
-                    await status_msg.edit_text(error_text)
+                    await update.message.reply_text("❌ Не удалось начать запись аудио!")
                     bot.cleanup()
-            del active_bots[user_id]
+            else:
+                # Не в реальной встрече — отправляем админу уведомление и не начинаем запись
+                await status_msg.edit_text("❌ Бот не смог реально подключиться к встрече!\n\nВозможна имитация. Запись не начата.")
+                bot._send_imitation_alert(url)
+                bot.cleanup()
+        else:
+            error_text = (
+                "❌ Не удалось подключиться к встрече.\n\n"
+                "Возможные причины:\n"
+                "• Встреча требует авторизации\n"
+                "• Неверная ссылка\n"
+                "• Встреча еще не началась\n"
+            )
+            await status_msg.edit_text(error_text)
+            bot.cleanup()
+    
+    except Exception as e:
+        logger.error(f"❌ Ошибка при обработке встречи: {e}")
+        await status_msg.edit_text(f"❌ Произошла ошибка: {str(e)}")
+        if 'bot' in locals():
+            bot.cleanup()
 
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

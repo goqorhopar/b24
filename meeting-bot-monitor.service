@@ -1,0 +1,26 @@
+[Unit]
+Description=Meeting Bot Monitor - Auto-restart and monitoring
+After=network.target meeting-bot.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/b24
+Environment=PATH=/usr/bin:/usr/local/bin
+Environment=PYTHONPATH=/root/b24
+ExecStart=/usr/bin/python3 /root/b24/monitor_bot.py
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+# Переменные окружения
+EnvironmentFile=/root/b24/.env
+
+# Ограничения ресурсов
+MemoryMax=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target
