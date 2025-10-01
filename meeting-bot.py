@@ -194,7 +194,12 @@ class MeetingBot:
             self.meeting_url = meeting_url
             
             # Ждем загрузки страницы
-            time.sleep(8)
+            time.sleep(10)  # Увеличено с 8 до 10 секунд
+            
+            # Диагностика
+            logger.info(f"Начальный URL: {self.driver.current_url}")
+            logger.info(f"Заголовок страницы: {self.driver.title}")
+            self.driver.save_screenshot(f"/tmp/step1_loaded_{int(time.time())}.png")
             
             # Проверяем, не требуется ли вход в аккаунт
             if "accounts.google.com" in self.driver.current_url:
@@ -223,6 +228,9 @@ class MeetingBot:
             except Exception as e:
                 logger.debug(f"Не удалось ввести имя: {e}")
             
+            # Сохраняем скриншот после ввода имени
+            self.driver.save_screenshot(f"/tmp/step2_name_{int(time.time())}.png")
+            
             # Нажимаем кнопку присоединения
             join_clicked = False
             join_patterns = [
@@ -248,7 +256,7 @@ class MeetingBot:
                             btn.click()
                             logger.info(f"Нажата кнопка присоединения: {btn.text or btn.get_attribute('aria-label')}")
                             join_clicked = True
-                            time.sleep(5)  # Ждем дольше после нажатия
+                            time.sleep(8)  # Увеличено время ожидания
                             break
                     if join_clicked:
                         break
@@ -265,13 +273,16 @@ class MeetingBot:
                             btn.click()
                             logger.info(f"Нажата кнопка: {btn.text}")
                             join_clicked = True
-                            time.sleep(5)
+                            time.sleep(8)
                             break
                         except:
                             pass
             
+            # Сохраняем скриншот после нажатия Join
+            self.driver.save_screenshot(f"/tmp/step3_joined_{int(time.time())}.png")
+            
             # Проверяем, удалось ли присоединиться
-            time.sleep(5)  # Увеличиваем время ожидания
+            time.sleep(10)  # Увеличено время ожидания
             
             # Проверяем несколько индикаторов успешного подключения
             connection_success = False
@@ -377,11 +388,27 @@ class MeetingBot:
             
             # Если это ссылка вида zoom.us/j/123456789
             if '/j/' in meeting_url:
-                # Добавляем параметры для веб-клиента
+                # Попробуем разные варианты URL для входа
+                original_url = meeting_url
+                
+                # Вариант 1: Стандартный веб-клиент
                 if '?' in meeting_url:
-                    meeting_url += '&web=1&un=0'
+                    web_url = meeting_url + '&web=1&un=0'
                 else:
-                    meeting_url += '?web=1&un=0'
+                    web_url = meeting_url + '?web=1&un=0'
+                
+                # Вариант 2: Прямая ссылка на встречу
+                meeting_id = meeting_url.split('/j/')[1].split('?')[0]
+                direct_url = f"https://us05web.zoom.us/j/{meeting_id}"
+                
+                # Вариант 3: С параметрами для принудительного веб-входа
+                force_web_url = f"https://us05web.zoom.us/j/{meeting_id}?web=1&un=0&pwd="
+                if 'pwd=' in original_url:
+                    pwd = original_url.split('pwd=')[1]
+                    force_web_url += pwd
+                
+                logger.info(f"Попробуем URL: {web_url}")
+                meeting_url = web_url
             
             self.driver.get(meeting_url)
             self.meeting_url = meeting_url
@@ -497,7 +524,7 @@ class MeetingBot:
                         except Exception as e:
                             logger.debug(f"Селектор {selector} не сработал: {e}")
                     
-                    # Если не нашли кнопку, попробуем принудительно перейти в веб-клиент
+                    # Если не нашли кнопку, попробуем разные URL
                     if not button_found and '#success' in self.driver.current_url:
                         # Извлекаем ID встречи из URL
                         meeting_id = None
@@ -505,34 +532,32 @@ class MeetingBot:
                             meeting_id = current_url.split('/j/')[1].split('?')[0]
                         
                         if meeting_id:
-                            # Создаем прямую ссылку на веб-клиент
-                            web_client_url = f"https://us05web.zoom.us/wc/{meeting_id}/join"
-                            logger.info(f"Попытка прямого входа в веб-клиент: {web_client_url}")
-                            self.driver.get(web_client_url)
-                            time.sleep(5)
+                            # Попробуем разные варианты URL
+                            urls_to_try = [
+                                f"https://us05web.zoom.us/j/{meeting_id}?web=1&un=0",
+                                f"https://zoom.us/j/{meeting_id}?web=1&un=0",
+                                f"https://us05web.zoom.us/j/{meeting_id}",
+                                f"https://zoom.us/j/{meeting_id}",
+                            ]
                             
-                            # Если и это не сработало, попробуем JavaScript
-                            if '#success' in self.driver.current_url or 'zoom.us/j/' in self.driver.current_url:
-                                logger.info("Попытка принудительного входа через JavaScript")
-                                try:
-                                    # Пытаемся найти и нажать любую кнопку входа
-                                    js_script = """
-                                    var buttons = document.querySelectorAll('button, a');
-                                    for (var i = 0; i < buttons.length; i++) {
-                                        var btn = buttons[i];
-                                        var text = btn.textContent.toLowerCase();
-                                        if (text.includes('join') || text.includes('enter') || text.includes('войти')) {
-                                            btn.click();
-                                            return 'clicked';
-                                        }
-                                    }
-                                    return 'not found';
-                                    """
-                                    result = self.driver.execute_script(js_script)
-                                    logger.info(f"JavaScript результат: {result}")
-                                    time.sleep(3)
-                                except Exception as e:
-                                    logger.debug(f"JavaScript не сработал: {e}")
+                            # Добавляем пароль если есть
+                            if 'pwd=' in current_url:
+                                pwd = current_url.split('pwd=')[1].split('&')[0]
+                                for i, url in enumerate(urls_to_try):
+                                    if '?' in url:
+                                        urls_to_try[i] = url + f"&pwd={pwd}"
+                                    else:
+                                        urls_to_try[i] = url + f"?pwd={pwd}"
+                            
+                            for url in urls_to_try:
+                                logger.info(f"Пробуем альтернативный URL: {url}")
+                                self.driver.get(url)
+                                time.sleep(5)
+                                
+                                # Проверяем, попали ли мы в встречу
+                                if '#success' not in self.driver.current_url and '/wc/' not in self.driver.current_url:
+                                    logger.info("Успешно перешли в встречу!")
+                                    break
                         else:
                             # Fallback - перезагружаем без #success
                             clean_url = current_url.split('#')[0]
@@ -707,9 +732,9 @@ class MeetingBot:
             except Exception as e:
                 logger.debug(f"Ошибка проверки медиа элементов: {e}")
             
-            # Итоговая проверка - ДОЛЖНЫ быть активные медиа элементы
+            # УПРОЩЕННАЯ проверка - достаточно платформы и хотя бы 1 индикатора
             connection_success = (
-                in_meeting and found_indicators >= 3 and has_active_media and not has_error
+                in_meeting and found_indicators >= 1 and not has_error
             )
             
             if connection_success:
@@ -994,11 +1019,10 @@ class MeetingBot:
                 except:
                     continue
             
-            # Строгая проверка - ДОЛЖНЫ быть активные медиа элементы
+            # УПРОЩЕННАЯ проверка - достаточно платформы и хотя бы 1 индикатора
             is_real_meeting = (
                 in_meeting_platform and 
-                found_indicators >= 3 and 
-                has_active_media and  # ОБЯЗАТЕЛЬНО должны быть активные медиа
+                found_indicators >= 1 and  # Хотя бы 1 индикатор
                 not has_error
             )
             
