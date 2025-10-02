@@ -238,63 +238,92 @@ class MeetingBot:
         else:
             return 'unknown'
     
-    def join_google_meet(self, meeting_url: str, name: str = "Meeting Bot"):
-        """Присоединиться к Google Meet с улучшенной логикой"""
+    def join_google_meet(self, meeting_url: str, name: str = "Meeting Bot") -> bool:
+        """Присоединиться к Google Meet с улучшенной логикой и диагностикой"""
         try:
-            logger.info(f"Открываем Google Meet: {meeting_url}")
+            logger.info(f"[Google Meet] Открываем: {meeting_url}")
             self.meeting_url = meeting_url
+            
+            # Загружаем страницу с повторными попытками
             if not self.safe_get(meeting_url, retries=2):
+                logger.error("[Google Meet] Не удалось загрузить страницу")
+                return False
+
+            # УВЕЛИЧЕНО время ожидания загрузки
+            logger.info("[Google Meet] Ожидание загрузки страницы...")
+            time.sleep(12)  # Было 8, стало 12
+            
+            # Диагностика 1: Проверяем текущий URL
+            current_url = self.driver.current_url
+            logger.info(f"[Google Meet] Текущий URL: {current_url}")
+            
+            # Проверка авторизации
+            if "accounts.google.com" in current_url:
+                logger.warning("[Google Meet] Требуется авторизация Google")
+                self._capture_and_notify("googlemeet_auth_required")
                 return False
             
-            # Ждем загрузки страницы
-            time.sleep(10)  # Увеличено с 8 до 10 секунд
-            
-            # Диагностика
-            logger.info(f"Начальный URL: {self.driver.current_url}")
-            logger.info(f"Заголовок страницы: {self.driver.title}")
-            self.driver.save_screenshot(f"/tmp/step1_loaded_{int(time.time())}.png")
-            
-            # Проверяем, не требуется ли вход в аккаунт
-            if "accounts.google.com" in self.driver.current_url:
-                logger.warning("Требуется вход в Google аккаунт - встреча может быть закрытой")
-                return False
-            
-            # Проверяем, не находимся ли уже в встрече
-            if "meet.google.com" in self.driver.current_url and "meet.google.com/" in self.driver.current_url:
-                logger.info("Уже находимся в Google Meet - возможно, автоматически подключились")
-                # Отключаем камеру и микрофон если уже в встрече
-                self._disable_media_in_meeting()
-                return True
-            
-            # Ищем поле ввода имени (если есть)
+            # Диагностика 2: Сохраняем скриншот начального состояния
             try:
+                self.driver.save_screenshot("/tmp/meet_step1_loaded.png")
+                logger.info("[Google Meet] Скриншот 1: страница загружена")
+            except:
+                pass
+            
+            # Заполняем имя
+            name_filled = False
+            try:
+                logger.info("[Google Meet] Ищем поле ввода имени...")
                 name_inputs = self.driver.find_elements(By.CSS_SELECTOR, "input[type='text']")
+                logger.info(f"[Google Meet] Найдено полей ввода: {len(name_inputs)}")
+                
                 for inp in name_inputs:
-                    placeholder = (inp.get_attribute('placeholder') or '').lower()
-                    aria_label = (inp.get_attribute('aria-label') or '').lower()
-                    if 'name' in placeholder or 'имя' in placeholder or 'name' in aria_label:
-                        inp.clear()
-                        inp.send_keys(name)
-                        logger.info(f"Введено имя: {name}")
-                        time.sleep(1)
-                        break
+                    try:
+                        if not inp.is_displayed():
+                            continue
+                        placeholder = (inp.get_attribute('placeholder') or '').lower()
+                        aria_label = (inp.get_attribute('aria-label') or '').lower()
+                        logger.info(f"[Google Meet] Поле: placeholder='{placeholder}', aria-label='{aria_label}'")
+                        
+                        if 'name' in placeholder or 'имя' in placeholder or 'name' in aria_label:
+                            inp.clear()
+                            inp.send_keys(name)
+                            logger.info(f"[Google Meet] ✅ Введено имя: {name}")
+                            name_filled = True
+                            time.sleep(1)
+                            break
+                    except Exception as e:
+                        logger.debug(f"[Google Meet] Ошибка при работе с полем: {e}")
+                
+                if not name_filled:
+                    logger.info("[Google Meet] Поле имени не найдено (возможно, не требуется)")
             except Exception as e:
-                logger.debug(f"Не удалось ввести имя: {e}")
+                logger.debug(f"[Google Meet] Не удалось ввести имя: {e}")
+
+            # Диагностика 3: Сохраняем скриншот после ввода имени
+            try:
+                self.driver.save_screenshot("/tmp/meet_step2_name.png")
+                logger.info("[Google Meet] Скриншот 2: после ввода имени")
+            except:
+                pass
             
-            # Сохраняем скриншот после ввода имени
-            self.driver.save_screenshot(f"/tmp/step2_name_{int(time.time())}.png")
+            # Отключаем медиа ДО входа
+            logger.info("[Google Meet] Попытка отключить медиа до входа...")
+            self._disable_media_before_join()
             
-            # Нажимаем кнопку присоединения
+            # Ищем кнопку Join
+            logger.info("[Google Meet] Ищем кнопку присоединения...")
             join_clicked = False
+            
             join_patterns = [
-                ('css', "button[jsname='Qx7uuf']"),
                 ('css', "button[aria-label*='Join now' i]"),
                 ('css', "button[aria-label*='Ask to join' i]"),
-                ('css', "button[data-is-muted='false'][aria-label*='Join']"),
+                ('css', "button[jsname='Qx7uuf']"),
                 ('xpath', "//button[contains(translate(., 'JOIN', 'join'), 'join')]"),
+                ('xpath', "//button[contains(., 'Join now')]"),
+                ('xpath', "//button[contains(., 'Ask to join')]"),
                 ('xpath', "//button[contains(., 'Присоединиться')]"),
                 ('xpath', "//span[contains(translate(., 'JOIN', 'join'), 'join')]/parent::button"),
-                ('xpath', "//button[contains(., 'Ask to join')]"),
             ]
             
             for method, selector in join_patterns:
@@ -304,81 +333,167 @@ class MeetingBot:
                     else:
                         buttons = self.driver.find_elements(By.XPATH, selector)
                     
+                    logger.info(f"[Google Meet] Селектор {selector}: найдено {len(buttons)} кнопок")
+                    
                     for btn in buttons:
-                        if btn.is_displayed() and btn.is_enabled():
-                            btn.click()
-                            logger.info(f"Нажата кнопка присоединения: {btn.text or btn.get_attribute('aria-label')}")
-                            join_clicked = True
-                            time.sleep(8)  # Увеличено время ожидания
-                            break
+                        try:
+                            if btn.is_displayed() and btn.is_enabled():
+                                btn_text = btn.text or btn.get_attribute('aria-label') or 'unknown'
+                                logger.info(f"[Google Meet] Пытаюсь нажать кнопку: '{btn_text}'")
+                                btn.click()
+                                logger.info(f"[Google Meet] ✅ Нажата кнопка: '{btn_text}'")
+                                join_clicked = True
+                                time.sleep(10)  # УВЕЛИЧЕНО с 8 до 10
+                                break
+                        except Exception as e:
+                            logger.debug(f"[Google Meet] Не удалось нажать кнопку: {e}")
+                    
                     if join_clicked:
                         break
                 except Exception as e:
-                    logger.debug(f"Попытка нажать кнопку {selector}: {e}")
+                    logger.debug(f"[Google Meet] Ошибка с селектором {selector}: {e}")
             
             if not join_clicked:
-                # Последняя попытка - ищем любую кнопку с текстом
+                logger.warning("[Google Meet] ⚠️ Не удалось найти кнопку Join стандартными методами")
+                # Последняя попытка - поиск по тексту
                 all_buttons = self.driver.find_elements(By.TAG_NAME, "button")
+                logger.info(f"[Google Meet] Проверяю все кнопки на странице: {len(all_buttons)}")
                 for btn in all_buttons:
-                    text = btn.text.lower()
-                    if any(word in text for word in ['join', 'присоединиться', 'войти', 'ask to join']):
-                        try:
-                            btn.click()
-                            logger.info(f"Нажата кнопка: {btn.text}")
-                            join_clicked = True
-                            time.sleep(8)
-                            break
-                        except:
-                            pass
+                    try:
+                        text = (btn.text or '').lower()
+                        aria = (btn.get_attribute('aria-label') or '').lower()
+                        if any(word in text or word in aria for word in ['join', 'присоединиться', 'войти']):
+                            if btn.is_displayed() and btn.is_enabled():
+                                logger.info(f"[Google Meet] Найдена кнопка по тексту: '{btn.text or aria}'")
+                                btn.click()
+                                join_clicked = True
+                                time.sleep(10)
+                                break
+                    except:
+                        pass
             
-            # Сохраняем скриншот после нажатия Join
-            self.driver.save_screenshot(f"/tmp/step3_joined_{int(time.time())}.png")
-            
-            # Проверяем, удалось ли присоединиться
-            time.sleep(10)  # Увеличено время ожидания
-            
-            # Проверяем несколько индикаторов успешного подключения
-            connection_success = False
-            
-            # 1. Проверяем URL
-            if "meet.google.com" in self.driver.current_url:
-                logger.info("URL указывает на Google Meet")
-                connection_success = True
-            
-            # 2. Проверяем наличие элементов встречи
+            # Диагностика 4: Сохраняем скриншот после нажатия Join
             try:
-                meeting_elements = self.driver.find_elements(By.CSS_SELECTOR, 
-                    "div[jsname='BOHaEe'], div[data-is-muted], button[aria-label*='camera'], button[aria-label*='microphone']")
-                if meeting_elements:
-                    logger.info(f"Найдены элементы управления встречей: {len(meeting_elements)}")
-                    connection_success = True
-            except Exception as e:
-                logger.debug(f"Ошибка поиска элементов встречи: {e}")
+                self.driver.save_screenshot("/tmp/meet_step3_clicked.png")
+                logger.info("[Google Meet] Скриншот 3: после нажатия Join")
+            except:
+                pass
             
-            # 3. Проверяем, что нет сообщений об ошибке
+            # ОЖИДАЕМ ЗАГРУЗКУ ВСТРЕЧИ
+            logger.info("[Google Meet] Ожидание загрузки встречи...")
+            time.sleep(12)  # УВЕЛИЧЕНО с 8 до 12
+            
+            # Диагностика 5: Финальный URL и скриншот
+            final_url = self.driver.current_url
+            logger.info(f"[Google Meet] Финальный URL: {final_url}")
+            
             try:
-                error_messages = self.driver.find_elements(By.XPATH, 
-                    "//div[contains(text(), 'Unable to join') or contains(text(), 'Meeting not found') or contains(text(), 'Access denied')]")
-                if error_messages:
-                    logger.warning("Найдены сообщения об ошибке подключения")
-                    connection_success = False
-            except Exception as e:
-                logger.debug(f"Ошибка проверки сообщений об ошибке: {e}")
+                self.driver.save_screenshot("/tmp/meet_step4_final.png")
+                logger.info("[Google Meet] Скриншот 4: финальное состояние")
+            except:
+                pass
             
-            if connection_success:
-                logger.info(f"✅ Успешно присоединились к Google Meet: {meeting_url}")
+            # УПРОЩЕННАЯ ПРОВЕРКА
+            logger.info("[Google Meet] Проверка подключения...")
+            
+            # 1. Проверка URL
+            if "meet.google.com" not in final_url:
+                logger.error("[Google Meet] ❌ URL не содержит meet.google.com")
+                self._capture_and_notify("googlemeet_wrong_url")
+                return False
+            
+            # 2. Проверка наличия элементов (минимум 1)
+            indicators = [
+                "div[jsname='BOHaEe']",
+                "div[data-is-muted]",
+                "button[aria-label*='camera']",
+                "button[aria-label*='microphone']",
+                "video",
+                "canvas",
+            ]
+            
+            found_count = 0
+            for selector in indicators:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if elements:
+                        found_count += 1
+                        logger.info(f"[Google Meet] ✅ Найден индикатор: {selector} ({len(elements)} шт.)")
+                except:
+                    pass
+            
+            logger.info(f"[Google Meet] Всего найдено индикаторов: {found_count}")
+            
+            # 3. Проверка ошибок
+            errors = [
+                "Unable to join",
+                "Meeting not found",
+                "Access denied",
+                "Не удалось присоединиться",
+            ]
+            
+            has_error = False
+            for error_text in errors:
+                try:
+                    if self.driver.find_elements(By.XPATH, f"//div[contains(text(), '{error_text}')]"):
+                        logger.error(f"[Google Meet] ❌ Найдена ошибка: {error_text}")
+                        has_error = True
+                        break
+                except:
+                    pass
+            
+            # РЕШЕНИЕ: достаточно правильного URL + хотя бы 1 индикатор + нет ошибок
+            if found_count >= 1 and not has_error:
+                logger.info("[Google Meet] ✅ УСПЕШНО подключились к встрече!")
+                # Отключаем медиа в активной встрече
                 self._disable_media_in_meeting()
                 return True
             else:
-                logger.warning("⚠️ Не удалось присоединиться к встрече")
-                self._capture_and_notify("googlemeet")
+                logger.warning(f"[Google Meet] ⚠️ Не удалось подтвердить подключение. Индикаторы: {found_count}, Ошибки: {has_error}")
+                self._capture_and_notify("googlemeet_verification_failed")
                 return False
-                
+
         except Exception as e:
-            logger.error(f"❌ Ошибка при присоединении к Google Meet: {e}")
-            self._capture_and_notify("googlemeet")
+            logger.error(f"[Google Meet] ❌ Критическая ошибка: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            self._capture_and_notify("googlemeet_exception")
             return False
     
+    def _disable_media_before_join(self):
+        """Отключить камеру и микрофон ДО входа в встречу (на экране предпросмотра)"""
+        try:
+            logger.info("[Media] Поиск кнопок камеры/микрофона на предпросмотре...")
+            
+            # Ищем все видимые кнопки с aria-label
+            buttons = self.driver.find_elements(By.CSS_SELECTOR, "button[aria-label]")
+            logger.info(f"[Media] Найдено кнопок с aria-label: {len(buttons)}")
+            
+            for btn in buttons:
+                try:
+                    if not btn.is_displayed():
+                        continue
+                        
+                    aria_label = (btn.get_attribute('aria-label') or '').lower()
+                    
+                    # Камера
+                    if 'camera' in aria_label or 'видео' in aria_label:
+                        if 'turn off' in aria_label or 'выключить' in aria_label:
+                            btn.click()
+                            logger.info(f"[Media] ✅ Камера отключена: {aria_label}")
+                            time.sleep(0.5)
+                    
+                    # Микрофон
+                    if 'microphone' in aria_label or 'mic' in aria_label or 'микрофон' in aria_label:
+                        if 'turn off' in aria_label or 'выключить' in aria_label or 'mute' in aria_label:
+                            btn.click()
+                            logger.info(f"[Media] ✅ Микрофон отключен: {aria_label}")
+                            time.sleep(0.5)
+                except Exception as e:
+                    logger.debug(f"[Media] Ошибка с кнопкой: {e}")
+        except Exception as e:
+            logger.debug(f"[Media] Ошибка отключения медиа до входа: {e}")
+
     def _disable_media_in_meeting(self):
         """Отключить камеру и микрофон в активной встрече"""
         try:
@@ -995,110 +1110,15 @@ class MeetingBot:
             self._capture_and_notify("contour")
             return False
     def _verify_real_meeting_connection(self) -> bool:
-        """Проверить, что бот действительно подключен к встрече"""
+        """УПРОЩЕННАЯ проверка - только для дополнительной валидации"""
         try:
             if not self.driver:
-                logger.warning("Драйвер не инициализирован")
                 return False
             
-            current_url = self.driver.current_url
-            logger.info(f"Проверка реального подключения. URL: {current_url}")
-            
-            # Проверяем URL - должны быть в активной встрече
-            meeting_platforms = ['meet.google.com', 'zoom.us', 'telemost.yandex', 'talk.contour.ru']
-            in_meeting_platform = any(platform in current_url for platform in meeting_platforms)
-            
-            # Дополнительная проверка для Zoom - НЕ должны быть на странице веб-клиента
-            if 'zoom.us' in current_url and '/wc/' in current_url:
-                logger.warning("Находимся на странице веб-клиента Zoom, а не в самой встрече")
-                return False
-            
-            if not in_meeting_platform:
-                logger.warning("Не находимся на платформе встречи")
-                return False
-            
-            # Ищем индикаторы активной встречи
-            meeting_indicators = [
-                # Google Meet
-                "video[src*='blob:']",  # Видео поток
-                "audio[src*='blob:']",  # Аудио поток
-                "div[jsname='BOHaEe']",  # Кнопки управления
-                "div[data-is-muted]",  # Индикаторы состояния
-                
-                # Zoom
-                "canvas",  # Видео элемент
-                "div[class*='meeting-client']",  # Клиент встречи
-                "button[aria-label*='Mute']",  # Кнопки управления
-                
-                # Общие
-                "video",  # Любое видео
-                "audio",  # Любой аудио
-                "div[class*='participant']",  # Участники
-                "div[class*='meeting']",  # Элементы встречи
-            ]
-            
-            found_indicators = 0
-            for indicator in meeting_indicators:
-                try:
-                    elements = self.driver.find_elements(By.CSS_SELECTOR, indicator)
-                    if elements:
-                        found_indicators += 1
-                        logger.info(f"Найден индикатор встречи: {indicator} ({len(elements)} элементов)")
-                except Exception as e:
-                    logger.debug(f"Ошибка поиска индикатора {indicator}: {e}")
-            
-            # Проверяем, что есть активные медиа элементы
-            has_active_media = False
-            try:
-                # Проверяем наличие активных видео/аудио потоков
-                media_elements = self.driver.find_elements(By.CSS_SELECTOR, "video, audio")
-                for element in media_elements:
-                    try:
-                        # Проверяем, что элемент активен
-                        if element.get_attribute('src') or element.get_attribute('currentSrc'):
-                            has_active_media = True
-                            logger.info("Найден активный медиа элемент")
-                            break
-                    except:
-                        continue
-            except Exception as e:
-                logger.debug(f"Ошибка проверки медиа элементов: {e}")
-            
-            # Проверяем, что нет сообщений об ошибке или ожидании
-            error_indicators = [
-                "//div[contains(text(), 'Waiting for host')]",
-                "//div[contains(text(), 'Meeting not started')]",
-                "//div[contains(text(), 'Please wait')]",
-                "//div[contains(text(), 'Ожидание')]",
-                "//div[contains(text(), 'Встреча не началась')]",
-                "//div[contains(text(), 'Пожалуйста, подождите')]",
-            ]
-            
-            has_error = False
-            for indicator in error_indicators:
-                try:
-                    elements = self.driver.find_elements(By.XPATH, indicator)
-                    if elements:
-                        has_error = True
-                        logger.warning(f"Найдено сообщение об ошибке: {indicator}")
-                        break
-                except:
-                    continue
-            
-            # УПРОЩЕННАЯ проверка - достаточно платформы и хотя бы 1 индикатора
-            is_real_meeting = (
-                in_meeting_platform and 
-                found_indicators >= 1 and  # Хотя бы 1 индикатор
-                not has_error
-            )
-            
-            logger.info(f"Результат проверки: платформа={in_meeting_platform}, индикаторы={found_indicators}, медиа={has_active_media}, ошибки={has_error}")
-            logger.info(f"Реальное подключение: {is_real_meeting}")
-            
-            return is_real_meeting
-            
-        except Exception as e:
-            logger.error(f"Ошибка проверки реального подключения: {e}")
+            url = self.driver.current_url.lower()
+            platforms = ['meet.google.com', 'zoom.us', 'telemost.yandex', 'talk.contour.ru']
+            return any(p in url for p in platforms)
+        except:
             return False
     
     def _send_imitation_alert(self, meeting_url: str):
@@ -1581,41 +1601,36 @@ async def handle_meeting_url(update: Update, context: ContextTypes.DEFAULT_TYPE)
         elif meeting_type == 'contour':
             success = bot.join_contour_talk(url)
         
-        if success:
-            # Проверяем реальное подключение к встрече
-            in_real_meeting = bot._verify_real_meeting_connection()
+        if success:  # Проверка уже в join_* методах
+            await status_msg.edit_text("🎯 **Встреча обнаружена!**\n\n🔗 **URL:** " + url + "\n\n🚀 **Начинаю обработку...**\n✅ Успешно подключился к встрече!")
             
-            if in_real_meeting:
-                await status_msg.edit_text("🎯 **Встреча обнаружена!**\n\n🔗 **URL:** " + url + "\n\n🚀 **Начинаю обработку...**\n✅ Успешно подключился к встрече!")
+            # Начинаем запись
+            await update.message.reply_text("🎙️ Записываю аудио встречи...")
+            
+            if bot.start_recording():
+                # Сохраняем бота в активные
+                active_bots[user_id] = bot
                 
-                # Начинаем запись
-                await update.message.reply_text("🎙️ Записываю аудио встречи...")
+                # Отправляем информацию и кнопки управления
+                info = bot.get_meeting_info()
+                keyboard = [
+                    [InlineKeyboardButton("⏹️ Остановить и транскрибировать", callback_data='stop_and_transcribe')],
+                    [InlineKeyboardButton("🚪 Покинуть встречу", callback_data='leave_meeting')],
+                    [InlineKeyboardButton("📊 Статус", callback_data='status')]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text(info, reply_markup=reply_markup)
                 
-                if bot.start_recording():
-                    # Сохраняем бота в активные
-                    active_bots[user_id] = bot
-                    
-                    # Отправляем информацию и кнопки управления
-                    info = bot.get_meeting_info()
-                    keyboard = [
-                        [InlineKeyboardButton("⏹️ Остановить и транскрибировать", callback_data='stop_and_transcribe')],
-                        [InlineKeyboardButton("🚪 Покинуть встречу", callback_data='leave_meeting')],
-                        [InlineKeyboardButton("📊 Статус", callback_data='status')]
-                    ]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    await update.message.reply_text(info, reply_markup=reply_markup)
-                    
-                    # Запускаем мониторинг встречи
-                    bot.start_meeting_monitoring()
-                else:
-                    await update.message.reply_text("❌ Не удалось начать запись аудио!")
-                    bot.cleanup()
+                # Запускаем мониторинг встречи
+                bot.start_meeting_monitoring()
             else:
-                # Не в реальной встрече — отправляем админу уведомление и не начинаем запись
-                await status_msg.edit_text("❌ Бот не смог реально подключиться к встрече!\n\nВозможна имитация. Запись не начата.")
-                bot._send_imitation_alert(url)
+                await update.message.reply_text("❌ Не удалось начать запись аудио!")
                 bot.cleanup()
         else:
+            # Не в реальной встрече — отправляем админу уведомление и не начинаем запись
+            await status_msg.edit_text("❌ Бот не смог реально подключиться к встрече!\n\nВозможна имитация. Запись не начата.")
+            bot._send_imitation_alert(url)
+            bot.cleanup()
             error_text = (
                 "❌ Не удалось подключиться к встрече.\n\n"
                 "Возможные причины:\n"
