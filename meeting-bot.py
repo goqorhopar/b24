@@ -200,27 +200,75 @@ class MeetingBot:
         """Безопасная загрузка URL с перезапуском драйвера при краше вкладки"""
         for attempt in range(1, retries + 1):
             try:
+                # Проверяем, что драйвер существует и активен
+                if not self.driver:
+                    logger.warning("Драйвер не инициализирован, создаем новый")
+                    self.setup_driver(headless=True)
+                
                 self.driver.get(url)
                 time.sleep(3)
                 return True
+                
             except WebDriverException as e:
                 msg = str(e).lower()
                 if 'tab crashed' in msg or 'disconnected' in msg or 'chrome not reachable' in msg:
                     logger.error(f"Краш вкладки/сессии при загрузке URL: {e}. Попытка {attempt}/{retries}")
+                    
+                    # Принудительная очистка драйвера
                     try:
-                        self.driver.quit()
-                    except Exception:
-                        pass
-                    # Реинициализация драйвера
-                    self.setup_driver(headless=True)
-                    continue
+                        if self.driver:
+                            self.driver.quit()
+                    except Exception as cleanup_error:
+                        logger.debug(f"Ошибка при закрытии драйвера: {cleanup_error}")
+                    finally:
+                        self.driver = None
+                    
+                    # Ждем перед пересозданием
+                    time.sleep(2)
+                    
+                    # Реинициализация драйвера только если это не последняя попытка
+                    if attempt < retries:
+                        try:
+                            self.setup_driver(headless=True)
+                            logger.info(f"Драйвер пересоздан, попытка {attempt + 1}")
+                        except Exception as setup_error:
+                            logger.error(f"Ошибка пересоздания драйвера: {setup_error}")
+                            return False
+                        continue
+                    else:
+                        logger.error("Исчерпаны все попытки пересоздания драйвера")
+                        return False
                 else:
                     logger.error(f"WebDriverException: {e}")
                     return False
+                    
             except Exception as e:
                 logger.error(f"Ошибка загрузки URL: {e}")
                 return False
+                
         return False
+
+    def _force_cleanup_driver(self):
+        """Принудительная очистка драйвера для предотвращения утечек памяти"""
+        try:
+            if self.driver:
+                # Закрываем все окна
+                try:
+                    self.driver.quit()
+                except Exception:
+                    pass
+                
+                # Принудительно убиваем процесс Chrome если он завис
+                try:
+                    import subprocess
+                    subprocess.run(['pkill', '-f', 'chrome'], capture_output=True, timeout=5)
+                except Exception:
+                    pass
+                
+                self.driver = None
+                logger.info("Драйвер принудительно очищен")
+        except Exception as e:
+            logger.debug(f"Ошибка принудительной очистки драйвера: {e}")
         
     def detect_meeting_type(self, url: str) -> str:
         """Определить тип встречи по URL"""
@@ -1453,9 +1501,7 @@ class MeetingBot:
     def leave_meeting(self):
         """Покинуть встречу"""
         try:
-            if self.driver:
-                self.driver.quit()
-                self.driver = None
+            self._force_cleanup_driver()
             logger.info("👋 Покинули встречу")
         except Exception as e:
             logger.error(f"❌ Ошибка при выходе из встречи: {e}")
@@ -1463,9 +1509,9 @@ class MeetingBot:
     def cleanup(self):
         """Очистка ресурсов"""
         self.meeting_active = False  # Останавливаем мониторинг
-        self.leave_meeting()
         if self.recording:
             self.stop_recording()
+        self._force_cleanup_driver()
         # Не удаляем аудио файл - он нужен для транскрипции
 
 
