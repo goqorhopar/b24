@@ -178,49 +178,107 @@ class MeetingBot:
         temp_profile_dir = tempfile.mkdtemp(prefix='meetingbot_chrome_')
         options.add_argument(f'--user-data-dir={temp_profile_dir}')
         
-        # Копируем существующий профиль если он есть
+        # Дополнительные флаги для предотвращения ошибок JSON
+        options.add_argument('--disable-logging')
+        options.add_argument('--disable-gpu-logging')
+        options.add_argument('--disable-dev-tools')
+        options.add_argument('--disable-extensions-file-access-check')
+        options.add_argument('--disable-extensions-http-throttling')
+        options.add_argument('--disable-extensions-except')
+        options.add_argument('--disable-default-apps')
+        options.add_argument('--disable-component-update')
+        options.add_argument('--disable-background-mode')
+        options.add_argument('--disable-features=TranslateUI,BlinkGenPropertyTrees')
+        options.add_argument('--disable-ipc-flooding-protection')
+        options.add_argument('--disable-renderer-backgrounding')
+        options.add_argument('--disable-backgrounding-occluded-windows')
+        options.add_argument('--disable-client-side-phishing-detection')
+        options.add_argument('--disable-component-extensions-with-background-pages')
+        options.add_argument('--disable-domain-reliability')
+        options.add_argument('--disable-hang-monitor')
+        options.add_argument('--disable-prompt-on-repost')
+        options.add_argument('--disable-sync')
+        options.add_argument('--disable-web-resources')
+        options.add_argument('--safebrowsing-disable-auto-update')
+        options.add_argument('--enable-automation')
+        options.add_argument('--password-store=basic')
+        options.add_argument('--use-mock-keychain')
+        
+        # Копируем существующий профиль если он есть (только безопасные файлы)
         if os.path.exists(CHROME_PROFILE_DIR):
             try:
-                # Копируем только нужные файлы профиля
-                for item in ['Default', 'Local State']:
-                    src = os.path.join(CHROME_PROFILE_DIR, item)
-                    dst = os.path.join(temp_profile_dir, item)
+                # Копируем только безопасные файлы профиля
+                safe_files = ['Default/Preferences', 'Default/Cookies', 'Default/Login Data']
+                for safe_file in safe_files:
+                    src = os.path.join(CHROME_PROFILE_DIR, safe_file)
+                    dst = os.path.join(temp_profile_dir, safe_file)
                     if os.path.exists(src):
-                        if os.path.isdir(src):
-                            shutil.copytree(src, dst, dirs_exist_ok=True)
-                        else:
-                            shutil.copy2(src, dst)
-                logger.info(f"Профиль скопирован из {CHROME_PROFILE_DIR} в {temp_profile_dir}")
+                        # Создаем директорию если нужно
+                        os.makedirs(os.path.dirname(dst), exist_ok=True)
+                        shutil.copy2(src, dst)
+                logger.info(f"Безопасные файлы профиля скопированы из {CHROME_PROFILE_DIR}")
             except Exception as e:
                 logger.warning(f"Не удалось скопировать профиль: {e}")
         
         # Сохраняем путь для последующей очистки
         self._temp_profile_dir = temp_profile_dir
 
-        # Инициализация драйвера
-        try:
-            self.driver = webdriver.Chrome(options=options)
-            self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            logger.info(f"Chrome драйвер инициализирован с профилем: {CHROME_PROFILE_DIR}")
+        # Инициализация драйвера с повторными попытками
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                logger.info(f"Попытка инициализации Chrome {attempt}/{max_attempts}")
+                
+                # Принудительно убиваем все процессы Chrome перед запуском
+                if attempt > 1:
+                    try:
+                        import subprocess
+                        subprocess.run(['pkill', '-f', 'chrome'], capture_output=True, timeout=5)
+                        time.sleep(2)
+                    except Exception:
+                        pass
+                
+                self.driver = webdriver.Chrome(options=options)
+                self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                logger.info(f"Chrome драйвер инициализирован с временным профилем: {temp_profile_dir}")
 
-            # Применяем сохраненные данные авторизации
-            auth_status = self.auth_loader.get_auth_status()
-            logger.info(f"Статус авторизации: {auth_status}")
+                # Применяем сохраненные данные авторизации
+                auth_status = self.auth_loader.get_auth_status()
+                logger.info(f"Статус авторизации: {auth_status}")
 
-            # Применяем авторизацию только если файлы существуют
-            auth_files = self.auth_loader.check_auth_files_exist()
-            if any(auth_files.values()):
-                if self.auth_loader.setup_authenticated_driver(self.driver):
-                    logger.info("✅ Драйвер настроен с авторизацией")
+                # Применяем авторизацию только если файлы существуют
+                auth_files = self.auth_loader.check_auth_files_exist()
+                if any(auth_files.values()):
+                    if self.auth_loader.setup_authenticated_driver(self.driver):
+                        logger.info("✅ Драйвер настроен с авторизацией")
+                    else:
+                        logger.warning("⚠️ Не удалось применить авторизацию")
                 else:
-                    logger.warning("⚠️ Не удалось применить авторизацию")
-            else:
-                logger.warning("⚠️ Файлы авторизации не найдены - возможны проблемы с закрытыми встречами")
-                logger.info("💡 Запустите: python simple_auth.py для настройки авторизации")
-
-        except Exception as e:
-            logger.error(f"Ошибка инициализации Chrome: {e}")
-            raise
+                    logger.warning("⚠️ Файлы авторизации не найдены - возможны проблемы с закрытыми встречами")
+                    logger.info("💡 Запустите: python simple_auth.py для настройки авторизации")
+                
+                # Если дошли сюда - успешно инициализировали
+                break
+                
+            except Exception as e:
+                error_msg = str(e).lower()
+                logger.error(f"Ошибка инициализации Chrome (попытка {attempt}): {e}")
+                
+                # Очищаем драйвер если он был создан
+                if hasattr(self, 'driver') and self.driver:
+                    try:
+                        self.driver.quit()
+                    except Exception:
+                        pass
+                    self.driver = None
+                
+                # Если это последняя попытка или не JSON ошибка - выбрасываем исключение
+                if attempt == max_attempts or 'json' not in error_msg:
+                    logger.error(f"Не удалось инициализировать Chrome после {max_attempts} попыток")
+                    raise
+                
+                # Ждем перед следующей попыткой
+                time.sleep(3)
 
     def safe_get(self, url: str, retries: int = 2) -> bool:
         """Безопасная загрузка URL с перезапуском драйвера при краше вкладки"""
@@ -539,7 +597,7 @@ class MeetingBot:
                 logger.warning(f"[Google Meet] ⚠️ Не удалось подтвердить подключение. Индикаторы: {found_count}, Ошибки: {has_error}")
                 self._capture_and_notify("googlemeet_verification_failed")
                 return False
-
+                
         except Exception as e:
             logger.error(f"[Google Meet] ❌ Критическая ошибка: {e}")
             import traceback
@@ -580,7 +638,7 @@ class MeetingBot:
                     logger.debug(f"[Media] Ошибка с кнопкой: {e}")
         except Exception as e:
             logger.debug(f"[Media] Ошибка отключения медиа до входа: {e}")
-
+    
     def _disable_media_in_meeting(self):
         """Отключить камеру и микрофон в активной встрече"""
         try:
@@ -1716,19 +1774,22 @@ async def handle_meeting_url(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await status_msg.edit_text("❌ Бот не смог реально подключиться к встрече!\n\nВозможна имитация. Запись не начата.")
             bot._send_imitation_alert(url)
             bot.cleanup()
-            error_text = (
-                "❌ Не удалось подключиться к встрече.\n\n"
-                "Возможные причины:\n"
-                "• Встреча требует авторизации\n"
-                "• Неверная ссылка\n"
-                "• Встреча еще не началась\n"
-            )
-            await status_msg.edit_text(error_text)
-            bot.cleanup()
     
     except Exception as e:
         logger.error(f"❌ Ошибка при обработке встречи: {e}")
         await status_msg.edit_text(f"❌ Произошла ошибка: {str(e)}")
+        if 'bot' in locals():
+            bot.cleanup()
+    
+    if not success:
+        error_text = (
+            "❌ Не удалось подключиться к встрече.\n\n"
+            "Возможные причины:\n"
+            "• Встреча требует авторизации\n"
+            "• Неверная ссылка\n"
+            "• Встреча еще не началась\n"
+        )
+        await status_msg.edit_text(error_text)
         if 'bot' in locals():
             bot.cleanup()
 
