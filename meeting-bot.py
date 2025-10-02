@@ -81,6 +81,7 @@ class MeetingBot:
         self.monitoring_task = None
         self.meeting_active = True
         self.auth_loader = get_auth_loader()
+        self._temp_profile_dir = None
         
         # Инициализация GitHub
         if GITHUB_TOKEN:
@@ -168,8 +169,33 @@ class MeetingBot:
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
 
-        # Постоянный профиль для сохранения авторизации платформ
-        options.add_argument(f'--user-data-dir={CHROME_PROFILE_DIR}')
+        # Создаем уникальную директорию профиля для предотвращения конфликтов
+        import tempfile
+        import shutil
+        import os
+        
+        # Создаем временную директорию профиля
+        temp_profile_dir = tempfile.mkdtemp(prefix='meetingbot_chrome_')
+        options.add_argument(f'--user-data-dir={temp_profile_dir}')
+        
+        # Копируем существующий профиль если он есть
+        if os.path.exists(CHROME_PROFILE_DIR):
+            try:
+                # Копируем только нужные файлы профиля
+                for item in ['Default', 'Local State']:
+                    src = os.path.join(CHROME_PROFILE_DIR, item)
+                    dst = os.path.join(temp_profile_dir, item)
+                    if os.path.exists(src):
+                        if os.path.isdir(src):
+                            shutil.copytree(src, dst, dirs_exist_ok=True)
+                        else:
+                            shutil.copy2(src, dst)
+                logger.info(f"Профиль скопирован из {CHROME_PROFILE_DIR} в {temp_profile_dir}")
+            except Exception as e:
+                logger.warning(f"Не удалось скопировать профиль: {e}")
+        
+        # Сохраняем путь для последующей очистки
+        self._temp_profile_dir = temp_profile_dir
 
         # Инициализация драйвера
         try:
@@ -267,6 +293,19 @@ class MeetingBot:
                 
                 self.driver = None
                 logger.info("Драйвер принудительно очищен")
+            
+            # Очищаем временную директорию профиля
+            if hasattr(self, '_temp_profile_dir') and self._temp_profile_dir:
+                try:
+                    import shutil
+                    if os.path.exists(self._temp_profile_dir):
+                        shutil.rmtree(self._temp_profile_dir)
+                        logger.info(f"Временная директория профиля очищена: {self._temp_profile_dir}")
+                except Exception as cleanup_error:
+                    logger.debug(f"Ошибка очистки временной директории: {cleanup_error}")
+                finally:
+                    self._temp_profile_dir = None
+                    
         except Exception as e:
             logger.debug(f"Ошибка принудительной очистки драйвера: {e}")
         
