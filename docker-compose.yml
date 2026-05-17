@@ -1,0 +1,145 @@
+# =============================================================================
+# MEETING BOT - DOCKER COMPOSE CONFIGURATION
+# Production-ready with volumes, networks, and health checks
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # Main Meeting Bot Service
+  meeting-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: meeting-bot
+    restart: unless-stopped
+    
+    # Environment variables
+    env_file:
+      - .env
+    
+    environment:
+      # Override/add specific env vars here
+      - RECORD_DIR=/opt/meeting-bot/recordings
+      - CHROME_PROFILE_DIR=/opt/meeting-bot/chrome-profile
+      - LOG_DIR=/opt/meeting-bot/logs
+      - HEADLESS_MODE=true
+      - TZ=UTC
+    
+    # Volumes for persistence
+    volumes:
+      # Recordings storage
+      - ./recordings:/opt/meeting-bot/recordings
+      # Logs storage
+      - ./logs:/opt/meeting-bot/logs
+      # Chrome profile (for persistent cookies/sessions)
+      - chrome_profile:/opt/meeting-bot/chrome-profile
+      # Temporary files
+      - ./temp:/opt/meeting-bot/temp
+      # Auth data (optional - mount your auth files)
+      - ./auth_data:/opt/meeting-bot/auth_data:ro
+    
+    # Shared memory for Chrome
+    shm_size: 2gb
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 120s
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    
+    # Read-only root filesystem (with tmpfs for writable areas)
+    read_only: true
+    tmpfs:
+      - /tmp:size=512M,mode=1777
+      - /var/tmp:size=256M,mode=1777
+
+  # Monitoring Service (optional)
+  monitor-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: meeting-bot-monitor
+    restart: unless-stopped
+    depends_on:
+      - meeting-bot
+    
+    env_file:
+      - .env
+    
+    environment:
+      - MONITOR_INTERVAL=300
+      - LOG_DIR=/opt/meeting-bot/logs
+    
+    volumes:
+      - ./logs:/opt/meeting-bot/logs
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    security_opt:
+      - no-new-privileges:true
+
+  # Redis for session management (optional, for multi-instance deployments)
+  redis:
+    image: redis:7-alpine
+    container_name: meeting-bot-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "2"
+    security_opt:
+      - no-new-privileges:true
+
+# Named volumes
+volumes:
+  chrome_profile:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./chrome-profile
+  
+  redis_data:
+    driver: local
+
+# Networks
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

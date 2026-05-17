@@ -1,7 +1,49 @@
+# =============================================================================
+# MEETING BOT - DEPENDENCIES
+# Production-ready with pinned versions for reproducibility
+# =============================================================================
+
+# Core Telegram Bot Framework
 python-telegram-bot==21.6
-selenium>=4.15.0
-faster-whisper>=1.0.0
-PyGithub>=2.1.1
-python-dotenv>=1.0.0
-webdriver-manager>=4.0.0
-playwright>=1.40.0
+
+# Browser Automation
+selenium==4.18.1
+webdriver-manager==4.0.1
+playwright==1.40.0
+
+# AI Transcription
+faster-whisper==1.0.0
+ctranslate2==4.0.0
+
+# GitHub Integration
+PyGithub==2.1.1
+
+# Environment Management
+python-dotenv==1.0.0
+
+# Testing (development)
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+
+# Code Quality (development)
+black==23.12.1
+flake8==7.0.0
+mypy==1.8.0
+isort==5.13.2
+
+# Security & Validation
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Logging & Monitoring
+python-json-logger==2.0.7
+sentry-sdk==1.39.1
+
+# Utilities
+aiohttp==3.9.1
+requests==2.31.0
+Pillow==10.2.0
+
+# System
+psutil==5.9.7
