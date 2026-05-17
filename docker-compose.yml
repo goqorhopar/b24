@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  meeting-bot:
+    build: .
+    container_name: meeting-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./recordings:/app/recordings
+      - ./chrome-profile:/app/chrome-profile
+      - ./logs:/app/logs
+      # Mount auth files if they exist
+      - ./storage.json:/app/storage.json:ro
+      - ./selenium_cookies.json:/app/selenium_cookies.json:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - RECORD_DIR=/app/recordings
+      - CHROME_PROFILE_DIR=/app/chrome-profile
+      - MEETING_TIMEOUT_MIN=180
+    shm_size: 2gb
+    mem_limit: 2g
+    cpus: 2
+    networks:
+      - bot-network
+
+networks:
+  bot-network:
+    driver: bridge
