@@ -25,7 +25,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
 
 # Telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -170,9 +170,7 @@ class MeetingBot:
         options.add_experimental_option('useAutomationExtension', False)
 
         # Создаем уникальную директорию профиля для предотвращения конфликтов
-        import tempfile
-        import shutil
-        import os
+        # Используем импорты из верхней части файла (PEP 8 compliance)
         
         # Создаем временную директорию профиля
         temp_profile_dir = tempfile.mkdtemp(prefix='meetingbot_chrome_')
@@ -232,7 +230,6 @@ class MeetingBot:
                 # Принудительно убиваем все процессы Chrome перед запуском
                 if attempt > 1:
                     try:
-                        import subprocess
                         subprocess.run(['pkill', '-f', 'chrome'], capture_output=True, timeout=5)
                         time.sleep(2)
                     except Exception:
@@ -344,7 +341,6 @@ class MeetingBot:
                 
                 # Принудительно убиваем процесс Chrome если он завис
                 try:
-                    import subprocess
                     subprocess.run(['pkill', '-f', 'chrome'], capture_output=True, timeout=5)
                 except Exception:
                     pass
@@ -355,7 +351,6 @@ class MeetingBot:
             # Очищаем временную директорию профиля
             if hasattr(self, '_temp_profile_dir') and self._temp_profile_dir:
                 try:
-                    import shutil
                     if os.path.exists(self._temp_profile_dir):
                         shutil.rmtree(self._temp_profile_dir)
                         logger.info(f"Временная директория профиля очищена: {self._temp_profile_dir}")
@@ -367,8 +362,79 @@ class MeetingBot:
         except Exception as e:
             logger.debug(f"Ошибка принудительной очистки драйвера: {e}")
         
+    def validate_url(self, url: str) -> bool:
+        """
+        Validate and sanitize meeting URL for security.
+        
+        Args:
+            url: The URL to validate
+            
+        Returns:
+            True if URL is valid and safe, False otherwise
+        """
+        if not url or not isinstance(url, str):
+            logger.warning("Invalid URL: empty or not a string")
+            return False
+        
+        # Check URL length (prevent DoS via very long URLs)
+        if len(url) > 2048:
+            logger.warning(f"Invalid URL: too long ({len(url)} chars)")
+            return False
+        
+        # Strip whitespace
+        url = url.strip()
+        
+        # Check for dangerous protocols
+        dangerous_protocols = ['javascript:', 'data:', 'file:', 'vbscript:', 'ftp:']
+        url_lower = url.lower()
+        for protocol in dangerous_protocols:
+            if url_lower.startswith(protocol):
+                logger.warning(f"Invalid URL: dangerous protocol '{protocol}'")
+                return False
+        
+        # Check for path traversal attempts
+        if '../' in url or '..\\' in url:
+            logger.warning("Invalid URL: path traversal attempt detected")
+            return False
+        
+        # Check for XSS patterns
+        xss_patterns = ['<script', 'javascript:', 'onerror=', 'onclick=', 'onload=']
+        for pattern in xss_patterns:
+            if pattern in url_lower:
+                logger.warning(f"Invalid URL: XSS pattern '{pattern}' detected")
+                return False
+        
+        # Check for SQL injection patterns
+        sql_patterns = ["'", '"', ';', '--', '/*', '*/', 'xp_', 'union select']
+        for pattern in sql_patterns:
+            if pattern in url_lower:
+                logger.warning(f"Invalid URL: SQL injection pattern detected")
+                return False
+        
+        # Must start with http:// or https://
+        if not (url.startswith('http://') or url.startswith('https://')):
+            logger.warning("Invalid URL: must start with http:// or https://")
+            return False
+        
+        # Basic URL structure validation
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            if not parsed.netloc:
+                logger.warning("Invalid URL: missing network location")
+                return False
+        except Exception as e:
+            logger.warning(f"Invalid URL: parsing error - {e}")
+            return False
+        
+        return True
+    
     def detect_meeting_type(self, url: str) -> str:
         """Определить тип встречи по URL"""
+        # First validate the URL
+        if not self.validate_url(url):
+            return 'unknown'
+            
         url_lower = url.lower()
         if 'meet.google.com' in url_lower:
             return 'google_meet'
