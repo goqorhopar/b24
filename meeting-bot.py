@@ -10,12 +10,13 @@ import sys
 import json
 import asyncio
 import logging
-from datetime import datetime
-from typing import Optional, Dict, Any
 import subprocess
 import tempfile
 import re
 import time
+import requests
+from datetime import datetime
+from typing import Optional, Dict, Any
 from pathlib import Path
 
 # Selenium для автоматизации браузера
@@ -25,7 +26,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
 
 # Telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -65,6 +66,57 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+
+def send_telegram_message(chat_id: str, bot_token: str, message: str, parse_mode: str = 'Markdown') -> bool:
+    """Централизованная функция отправки сообщений в Telegram"""
+    if not (chat_id and bot_token):
+        logger.warning("TELEGRAM_BOT_TOKEN или chat_id не заданы")
+        return False
+    
+    try:
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        resp = requests.post(url, data={
+            'chat_id': chat_id,
+            'text': message,
+            'parse_mode': parse_mode
+        }, timeout=10)
+        
+        if resp.status_code == 200:
+            logger.info("Telegram сообщение отправлено")
+            return True
+        else:
+            logger.error(f"Ошибка отправки Telegram сообщения: {resp.text}")
+            return False
+    except Exception as e:
+        logger.error(f"Исключение при отправке Telegram сообщения: {e}")
+        return False
+
+
+def send_telegram_photo(chat_id: str, bot_token: str, photo_path: str, caption: str = "") -> bool:
+    """Централизованная функция отправки фото в Telegram"""
+    if not (chat_id and bot_token):
+        logger.warning("TELEGRAM_BOT_TOKEN или chat_id не заданы")
+        return False
+    
+    try:
+        url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+        with open(photo_path, 'rb') as img:
+            resp = requests.post(url, data={
+                'chat_id': chat_id,
+                'caption': caption,
+                'parse_mode': 'Markdown'
+            }, files={'photo': img}, timeout=30)
+        
+        if resp.status_code == 200:
+            logger.info("Telegram фото отправлено")
+            return True
+        else:
+            logger.error(f"Ошибка отправки Telegram фото: {resp.text}")
+            return False
+    except Exception as e:
+        logger.error(f"Исключение при отправке Telegram фото: {e}")
+        return False
 
 
 class MeetingBot:
@@ -170,11 +222,6 @@ class MeetingBot:
         options.add_experimental_option('useAutomationExtension', False)
 
         # Создаем уникальную директорию профиля для предотвращения конфликтов
-        import tempfile
-        import shutil
-        import os
-        
-        # Создаем временную директорию профиля
         temp_profile_dir = tempfile.mkdtemp(prefix='meetingbot_chrome_')
         options.add_argument(f'--user-data-dir={temp_profile_dir}')
         
@@ -232,7 +279,6 @@ class MeetingBot:
                 # Принудительно убиваем все процессы Chrome перед запуском
                 if attempt > 1:
                     try:
-                        import subprocess
                         subprocess.run(['pkill', '-f', 'chrome'], capture_output=True, timeout=5)
                         time.sleep(2)
                     except Exception:
@@ -344,7 +390,6 @@ class MeetingBot:
                 
                 # Принудительно убиваем процесс Chrome если он завис
                 try:
-                    import subprocess
                     subprocess.run(['pkill', '-f', 'chrome'], capture_output=True, timeout=5)
                 except Exception:
                     pass
@@ -355,7 +400,6 @@ class MeetingBot:
             # Очищаем временную директорию профиля
             if hasattr(self, '_temp_profile_dir') and self._temp_profile_dir:
                 try:
-                    import shutil
                     if os.path.exists(self._temp_profile_dir):
                         shutil.rmtree(self._temp_profile_dir)
                         logger.info(f"Временная директория профиля очищена: {self._temp_profile_dir}")
@@ -1268,64 +1312,31 @@ class MeetingBot:
     
     def _send_imitation_alert(self, meeting_url: str):
         """Отправить уведомление об имитации подключения"""
-        import requests
-        ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', '')
-        TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
-        
-        if not (ADMIN_CHAT_ID and TELEGRAM_BOT_TOKEN):
-            logger.warning("ADMIN_CHAT_ID или TELEGRAM_BOT_TOKEN не заданы для отправки уведомления")
-            return
-        
-        try:
-            msg = f"🚨 **Meeting Bot: Имитация подключения!**\n\n"
-            msg += f"🔗 URL: {meeting_url}\n"
-            msg += f"⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            msg += "❌ Бот не смог реально подключиться к встрече.\n"
-            msg += "Возможные причины:\n"
-            msg += "• Требуется авторизация\n"
-            msg += "• Встреча еще не началась\n"
-            msg += "• Неверная ссылка\n"
-            msg += "• Проблемы с cookies"
-            
-            url_api = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-            resp = requests.post(url_api, data={
-                'chat_id': ADMIN_CHAT_ID,
-                'text': msg,
-                'parse_mode': 'Markdown'
-            })
-            
-            if resp.status_code == 200:
-                logger.info("Уведомление об имитации отправлено админу")
-            else:
-                logger.error(f"Ошибка отправки уведомления: {resp.text}")
-                
-        except Exception as e:
-            logger.error(f"Ошибка отправки уведомления об имитации: {e}")
+        send_telegram_message(
+            chat_id=ADMIN_CHAT_ID,
+            bot_token=TELEGRAM_BOT_TOKEN,
+            message=(
+                f"🚨 **Meeting Bot: Имитация подключения!**\n\n"
+                f"🔗 URL: {meeting_url}\n"
+                f"⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                f"❌ Бот не смог реально подключиться к встрече.\n"
+                f"Возможные причины:\n"
+                f"• Требуется авторизация\n"
+                f"• Встреча еще не началась\n"
+                f"• Неверная ссылка\n"
+                f"• Проблемы с cookies"
+            )
+        )
     
     def _send_screenshot_to_admin(self, screenshot_path, meeting_url):
         """Отправить скриншот ошибки админу в Telegram"""
-        import requests
-        ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', '')
-        TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
-        if not (ADMIN_CHAT_ID and TELEGRAM_BOT_TOKEN):
-            logger.warning("ADMIN_CHAT_ID или TELEGRAM_BOT_TOKEN не заданы для отправки скриншота")
-            return
-        try:
-            with open(screenshot_path, 'rb') as img:
-                files = {'photo': img}
-                caption = f"❌ Meeting Bot не смог подключиться к встрече!\nURL: {meeting_url}"
-                url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-                resp = requests.post(url, data={
-                    'chat_id': ADMIN_CHAT_ID,
-                    'caption': caption
-                }, files=files)
-                if resp.status_code == 200:
-                    logger.info("Скриншот ошибки отправлен админу в Telegram")
-                else:
-                    logger.error(f"Ошибка отправки скриншота админу: {resp.text}")
-        except Exception as e:
-            logger.error(f"Ошибка отправки скриншота админу: {e}")
-            return False
+        caption = f"❌ Meeting Bot не смог подключиться к встрече!\nURL: {meeting_url}"
+        send_telegram_photo(
+            chat_id=ADMIN_CHAT_ID,
+            bot_token=TELEGRAM_BOT_TOKEN,
+            photo_path=screenshot_path,
+            caption=caption
+        )
 
     def _capture_and_notify(self, platform_tag: str):
         try:
@@ -1950,18 +1961,9 @@ if __name__ == '__main__':
     except Exception as e:
         logger.error(f"❌ Критическая ошибка: {e}", exc_info=True)
         # Отправка уведомления админу в Telegram
-        import requests
-        ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', '')
-        TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
-        if ADMIN_CHAT_ID and TELEGRAM_BOT_TOKEN:
-            msg = f"❌ Meeting Bot упал!\n\nОшибка: {e}"
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-            try:
-                requests.post(url, data={
-                    'chat_id': ADMIN_CHAT_ID,
-                    'text': msg,
-                    'parse_mode': 'Markdown'
-                })
-            except Exception as err:
-                logger.error(f"Ошибка отправки Telegram уведомления админу: {err}")
+        send_telegram_message(
+            chat_id=ADMIN_CHAT_ID,
+            bot_token=TELEGRAM_BOT_TOKEN,
+            message=f"❌ Meeting Bot упал!\n\nОшибка: {e}"
+        )
         sys.exit(1)
